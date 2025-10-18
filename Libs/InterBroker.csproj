@@ -1,0 +1,26 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>netstandard2.0</TargetFramework>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+  </PropertyGroup>
+
+  <PropertyGroup>
+    <IsPackable>true</IsPackable>
+    <GeneratePackageOnBuild>True</GeneratePackageOnBuild>
+    <Version>0.0.1</Version>
+    <Description>Minimalistic async wrapper around IBKR TWS API for Interactive Brokers.</Description>
+    <Authors>artemiusgreat</Authors>
+    <Copyright>indemos.com</Copyright>
+    <PackageProjectUrl>http://indemos.com</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/Indemos/Distribution</RepositoryUrl>
+    <PackageTags>TWS IBKR Interactive-Brokers</PackageTags>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="System.Threading.Tasks" Version="4.3.0" />
+  </ItemGroup>
+  
+</Project>

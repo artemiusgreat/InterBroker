@@ -1,0 +1,31 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.14.36414.22
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Demo", "Demo\Demo.csproj", "{4CE57B02-B8E5-4417-92B2-0244E7089298}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "InterBroker", "Libs\InterBroker.csproj", "{B797FA70-05AE-B7AD-944C-BBCA72F62000}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{4CE57B02-B8E5-4417-92B2-0244E7089298}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{4CE57B02-B8E5-4417-92B2-0244E7089298}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{4CE57B02-B8E5-4417-92B2-0244E7089298}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{4CE57B02-B8E5-4417-92B2-0244E7089298}.Release|Any CPU.Build.0 = Release|Any CPU
+		{B797FA70-05AE-B7AD-944C-BBCA72F62000}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{B797FA70-05AE-B7AD-944C-BBCA72F62000}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{B797FA70-05AE-B7AD-944C-BBCA72F62000}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{B797FA70-05AE-B7AD-944C-BBCA72F62000}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(ExtensibilityGlobals) = postSolution
+		SolutionGuid = {573424C9-1588-4C98-99C8-7C355F4C15EC}
+	EndGlobalSection
+EndGlobal
