@@ -8,6 +8,10 @@ Minimalistic async wrapper around IBKR TWS API for Interactive Brokers.
 ![GitHub](https://img.shields.io/github/license/Indemos/Terminal)
 ![GitHub](https://img.shields.io/badge/system-Windows%20%7C%20Linux%20%7C%20Mac-blue)
 
+# Nuget 
+
+`dotnet add package InterBroker --version 0.0.1`
+
 # Usage 
 
 ```C#
