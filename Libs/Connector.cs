@@ -24,12 +24,6 @@ namespace InteractiveBrokers
     public virtual TimeSpan Span { get; set; } = TimeSpan.Zero;
     public virtual TimeSpan Timeout { get; set; } = TimeSpan.FromSeconds(5);
 
-    public virtual Action<string> OnMessage { get; set; } = o => { };
-    public virtual Action<string> OnConnection { get; set; } = o => { };
-    public virtual Action<PriceMessage> OnPrice { get; set; } = o => { };
-    public virtual Action<OpenOrderMessage> OnOrder { get; set; } = o => { };
-    public virtual Action<int, int, string, string, Exception> OnError { get; set; } = (id, code, message, error, e) => { };
-
     /// <summary>
     /// Connect
     /// </summary>
@@ -53,10 +47,6 @@ namespace InteractiveBrokers
 
       process.Start();
       reader.Start();
-
-      SubscribeToErrors();
-      SubscribeToOrders();
-      SubscribeToConnections();
     }
 
     /// <summary>
@@ -317,7 +307,7 @@ namespace InteractiveBrokers
     /// <param name="dataType"></param>
     /// <param name="snapshot"></param>
     /// <param name="regSnapshot"></param>
-    public virtual async Task SubscribeToTicks(Contract contract, string dataType, bool snapshot = false, bool regSnapshot = false)
+    public virtual async Task<int> SubscribeToTicks(Action<PriceMessage> action, Contract contract, string dataType, bool snapshot = false, bool regSnapshot = false)
     {
       var id = Id;
       var price = new PriceMessage();
@@ -342,6 +332,8 @@ namespace InteractiveBrokers
           {
             return;
           }
+
+          action(price);
         }
       }
 
@@ -349,6 +341,8 @@ namespace InteractiveBrokers
       Instance.ClientSocket.reqMktData(id, contract, dataType, snapshot, regSnapshot, null);
 
       await Task.Delay(Span);
+
+      return id;
     }
 
     /// <summary>
@@ -388,76 +382,28 @@ namespace InteractiveBrokers
     }
 
     /// <summary>
-    /// Bracket template
-    /// </summary>
-    /// <param name="order"></param>
-    /// <param name="stopPrice"></param>
-    /// <param name="takePrice"></param>
-    public virtual IList<Order> CreateOrder(Order order, double? stopPrice = null, double? takePrice = null)
-    {
-      var orders = new List<Order> { order };
-
-      if (takePrice != null)
-      {
-        order.Transmit = false;
-
-        var TP = new Order
-        {
-          OrderType = "LMT",
-          OrderId = order.OrderId + 1,
-          Action = order?.Action == "BUY" ? "SELL" : "BUY",
-          TotalQuantity = order.TotalQuantity,
-          LmtPrice = takePrice.Value,
-          ParentId = order.OrderId,
-          Transmit = false
-        };
-
-        orders.Add(TP);
-      }
-
-      if (stopPrice != null)
-      {
-        order.Transmit = false;
-
-        var SL = new Order
-        {
-          OrderType = "STP",
-          OrderId = order.OrderId + 2,
-          Action = order?.Action == "BUY" ? "SELL" : "BUY",
-          TotalQuantity = order.TotalQuantity,
-          AuxPrice = stopPrice.Value,
-          ParentId = order.OrderId,
-          Transmit = false
-        };
-
-        orders.Add(SL);
-      }
-
-      orders.Last().Transmit = true;
-
-      return orders;
-    }
-
-    /// <summary>
     /// Send order
     /// </summary>
     /// <param name="contract"></param>
-    /// <param name="orders"></param>
-    public virtual async Task<IList<OpenOrderMessage>> SendOrder(Contract contract, IList<Order> orders)
+    /// <param name="order"></param>
+    /// <param name="stopPrice"></param>
+    /// <param name="takePrice"></param>
+    public virtual async Task<IList<OpenOrderMessage>> SendOrder(Contract contract, Order order, double? stopPrice = null, double? takePrice = null)
     {
       var orderId = Instance.NextOrderId;
       var response = new Dictionary<int, OpenOrderMessage>();
+      var orders = CreateOrder(order, stopPrice, takePrice);
 
-      foreach (var order in orders)
+      foreach (var o in orders)
       {
         var source = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
 
         void subscribe(OpenOrderMessage message)
         {
-          if (Equals(order.OrderId, message.OrderId))
+          if (Equals(o.OrderId, message.OrderId))
           {
-            response[message.OrderId] = message;
             unsubscribe();
+            response[message.OrderId] = message;
             source.TrySetResult(true);
           }
         }
@@ -470,9 +416,9 @@ namespace InteractiveBrokers
 
         Instance.OpenOrder += subscribe;
         Instance.OpenOrderEnd += unsubscribe;
-        Instance.ClientSocket.placeOrder(order.OrderId, contract, order);
+        Instance.ClientSocket.placeOrder(o.OrderId, contract, o);
 
-        await await Task.WhenAny(source.Task, Task.Delay(Timeout).ContinueWith(o => unsubscribe()));
+        await await Task.WhenAny(source.Task, Task.Delay(Timeout).ContinueWith(_ => unsubscribe()));
         await Task.Delay(Span);
       }
 
@@ -482,7 +428,7 @@ namespace InteractiveBrokers
     /// <summary>
     /// Cancel order
     /// </summary>
-    /// <param name="order"></param>
+    /// <param name="orderId"></param>
     public virtual async Task<OrderStatusMessage> ClearOrder(int orderId)
     {
       var source = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -515,15 +461,17 @@ namespace InteractiveBrokers
     /// <summary>
     /// Subscribe to connections
     /// </summary>
-    protected virtual void SubscribeToConnections()
+    /// <param name="action"></param>
+    protected virtual void SubscribeToConnections(Action<string> action)
     {
-      Instance.ConnectionClosed += () => OnConnection("No connection");
+      Instance.ConnectionClosed += () => action("No connection");
     }
 
     /// <summary>
     /// Subscribe to errors
     /// </summary>
-    public virtual void SubscribeToErrors()
+    /// <param name="action"></param>
+    public virtual void SubscribeToErrors(Action<int, int, string, string, Exception> action)
     {
       Instance.Error += (id, code, message, error, e) =>
       {
@@ -533,17 +481,67 @@ namespace InteractiveBrokers
           case true when Equals(code, (int)ClientErrorEnum.ConnectionError): Connect(); break;
         }
 
-        OnError(id, code, message, error, e);
+        action(id, code, message, error, e);
       };
     }
 
     /// <summary>
     /// Subscribe orders
     /// </summary>
-    public virtual void SubscribeToOrders()
+    /// <param name="action"></param>
+    public virtual void SubscribeToOrders(Action<OpenOrderMessage> action)
     {
-      Instance.OpenOrder += o => OnOrder(o);
+      Instance.OpenOrder += o => action(o);
       Instance.ClientSocket.reqAutoOpenOrders(true);
+    }
+
+    /// <summary>
+    /// Bracket template
+    /// </summary>
+    /// <param name="order"></param>
+    /// <param name="stopPrice"></param>
+    /// <param name="takePrice"></param>
+    protected virtual IList<Order> CreateOrder(Order order, double? stopPrice = null, double? takePrice = null)
+    {
+      var orders = new List<Order>();
+
+      if (takePrice != null)
+      {
+        var TP = new Order
+        {
+          OrderType = "LMT",
+          OrderId = order.OrderId + 1,
+          Action = order?.Action == "BUY" ? "SELL" : "BUY",
+          TotalQuantity = order.TotalQuantity,
+          LmtPrice = takePrice.Value,
+          ParentId = order.OrderId,
+          Transmit = false
+        };
+
+        orders.Add(TP);
+      }
+
+      if (stopPrice != null)
+      {
+        var SL = new Order
+        {
+          OrderType = "STP",
+          OrderId = order.OrderId + 2,
+          Action = order?.Action == "BUY" ? "SELL" : "BUY",
+          TotalQuantity = order.TotalQuantity,
+          AuxPrice = stopPrice.Value,
+          ParentId = order.OrderId,
+          Transmit = false
+        };
+
+        orders.Add(SL);
+      }
+
+      order.Transmit = true;
+      order.OrderId = Instance.NextOrderId;
+      orders.Add(order);
+
+      return orders;
     }
   }
 }

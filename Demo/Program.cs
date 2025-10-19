@@ -1,5 +1,6 @@
 using IBApi;
 using InteractiveBrokers;
+using System.Text.Json;
 
 namespace Demo
 {
@@ -38,8 +39,26 @@ namespace Demo
       var orders = await broker.GetOrders();
       var positions = await broker.GetPositions("AccountNumber");
 
+      var order = new Order
+      {
+        Action = "BUY",
+        OrderType = "LMT",
+        TotalQuantity = 1,
+        LmtPrice = prices.Last().PriceAsk,
+      };
+
+      var orderResponse = await broker.SendOrder(
+        contract,
+        order,
+        order.LmtPrice - 50,
+        order.LmtPrice + 50);
+
+      var orderStatus = await broker.ClearOrder(orderResponse.Last().OrderId);
+      var subscriptionId = await broker.SubscribeToTicks(price => Console.WriteLine($"Price: {JsonSerializer.Serialize(price)}"), contract, "BID_ASK");
+
       Console.ReadKey();
 
+      broker.Unsubscribe(subscriptionId);
       broker.Disconnect();
     }
   }
