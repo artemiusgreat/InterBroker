@@ -27,17 +27,18 @@ namespace Demo
         SecType = "OPT",
         Exchange = "SMART",
         Currency = "USD",
-        LastTradeDate = "20251015"
+        LastTradeDateOrContractMonth = "20251017"
       };
 
       broker.Connect();
 
-      var contracts = await broker.GetContracts(contract);
-      var bars = await broker.GetBars(contract, DateTime.Now, "1 D", "1 min", "MIDPOINT");
-      var prices = await broker.GetTicks(contract, DateTime.Now.AddDays(-5), DateTime.Now, "BID_ASK", 100);
-      var options = await broker.GetContracts(optionContract);
-      var orders = await broker.GetOrders();
-      var positions = await broker.GetPositions("AccountNumber");
+      var cleaner = CancellationToken.None;
+      var contracts = await broker.GetContracts(cleaner, contract);
+      var bars = await broker.GetBars(cleaner, contract, DateTime.Now, "1 D", "1 min", "MIDPOINT");
+      var prices = await broker.GetTicks(cleaner, contract, DateTime.Now.AddDays(-5), DateTime.Now, "BID_ASK", 100);
+      var options = await broker.GetContracts(cleaner, optionContract);
+      var orders = await broker.GetOrders(cleaner);
+      var positions = await broker.GetPositions(cleaner, "AccountNumber");
 
       var order = new Order
       {
@@ -48,14 +49,15 @@ namespace Demo
       };
 
       var orderResponse = await broker.SendOrder(
-        contract,
+        cleaner,
+        contracts.Last().Contract,
         order,
         order.LmtPrice - 50,
         order.LmtPrice + 50);
 
       broker.OnPrice += price => Console.WriteLine(JsonSerializer.Serialize(price));
 
-      var orderStatus = await broker.ClearOrder(orderResponse.Last().OrderId);
+      var orderStatus = await broker.ClearOrder(cleaner, orderResponse.Last().OrderId);
       var subscriptionId = await broker.SubscribeToTicks(contract, "BID_ASK");
 
       Console.ReadKey();

@@ -22,7 +22,7 @@ namespace InteractiveBrokers
     public virtual string Host { get; set; } = "localhost";
 
     public virtual TimeSpan Span { get; set; } = TimeSpan.Zero;
-    public virtual TimeSpan Timeout { get; set; } = TimeSpan.FromSeconds(5);
+    public virtual TimeSpan Timeout { get; set; } = TimeSpan.FromSeconds(30);
 
     public Action<PriceMessage> OnPrice { get; set; } = o => { };
     public Action<ComputationMessage> OnComputation { get; set; } = o => { };
@@ -34,7 +34,7 @@ namespace InteractiveBrokers
     public virtual void Connect(int id = 0)
     {
       var signal = new EReaderMonitorSignal();
-      
+
       Instance = new IBClient(signal);
       Instance.ClientSocket.eConnect(Host, Port, id);
 
@@ -72,8 +72,9 @@ namespace InteractiveBrokers
     /// <summary>
     /// Get contract definition
     /// </summary>
+    /// <param name="cleaner"></param>
     /// <param name="contract"></param>
-    public virtual async Task<List<ContractDetails>> GetContracts(Contract contract)
+    public virtual async Task<List<ContractDetails>> GetContracts(CancellationToken cleaner, Contract contract)
     {
       var nextId = Id;
       var response = new List<ContractDetails>();
@@ -91,7 +92,6 @@ namespace InteractiveBrokers
       {
         Instance.ContractDetails -= subscribe;
         Instance.ContractDetailsEnd -= unsubscribe;
-
         source.TrySetResult(true);
       }
 
@@ -99,7 +99,7 @@ namespace InteractiveBrokers
       Instance.ContractDetailsEnd += unsubscribe;
       Instance.ClientSocket.reqContractDetails(nextId, contract);
 
-      await await Task.WhenAny(source.Task, Task.Delay(Timeout).ContinueWith(o => unsubscribe(nextId)));
+      await await Task.WhenAny(source.Task, Task.Delay(Timeout, cleaner).ContinueWith(o => unsubscribe(nextId)));
       await Task.Delay(Span);
 
       return response;
@@ -108,21 +108,22 @@ namespace InteractiveBrokers
     /// <summary>
     /// Get historical ticks
     /// </summary>
+    /// <param name="cleaner"></param>
     /// <param name="contract"></param>
     /// <param name="minDate"></param>
     /// <param name="maxDate"></param>
     /// <param name="dataType"></param>
     /// <param name="count"></param>
     /// <param name="session"></param>
-    public virtual async Task<IList<HistoricalTickBidAsk>> GetTicks(Contract contract, DateTime minDate, DateTime maxDate, string dataType, int count = 1, int session = 0)
+    public virtual async Task<IList<HistoricalTickBidAsk>> GetTicks(CancellationToken cleaner, Contract contract, DateTime minDate, DateTime maxDate, string dataType, int count = 1, int session = 0)
     {
-      var id = Id;
+      var nextId = Id;
       var items = new HistoricalTickBidAsk[0];
       var source = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
 
       void subscribe(HistoricalTicksMessage message)
       {
-        if (Equals(id, message.ReqId))
+        if (Equals(nextId, message.ReqId))
         {
           items = message.Items;
           unsubscribe();
@@ -139,9 +140,9 @@ namespace InteractiveBrokers
       var maxDateStr = maxDate.ToString($"yyyyMMdd-HH:mm:ss");
 
       Instance.historicalTicksList += subscribe;
-      Instance.ClientSocket.reqHistoricalTicks(id, contract, minDateStr, maxDateStr, count, dataType, session, false, null);
+      Instance.ClientSocket.reqHistoricalTicks(nextId, contract, minDateStr, maxDateStr, count, dataType, session, false, null);
 
-      await await Task.WhenAny(source.Task, Task.Delay(Timeout).ContinueWith(o => unsubscribe()));
+      await await Task.WhenAny(source.Task, Task.Delay(Timeout, cleaner).ContinueWith(o => unsubscribe()));
       await Task.Delay(Span);
 
       return items;
@@ -150,21 +151,22 @@ namespace InteractiveBrokers
     /// <summary>
     /// Get historical bars
     /// </summary>
+    /// <param name="cleaner"></param>
     /// <param name="contract"></param>
     /// <param name="maxDate"></param>
     /// <param name="duration"></param>
     /// <param name="barType"></param>
     /// <param name="dataType"></param>
     /// <param name="session"></param>
-    public virtual async Task<IList<HistoricalDataMessage>> GetBars(Contract contract, DateTime maxDate, string duration, string barType, string dataType, int session = 0)
+    public virtual async Task<IList<HistoricalDataMessage>> GetBars(CancellationToken cleaner, Contract contract, DateTime maxDate, string duration, string barType, string dataType, int session = 0)
     {
-      var id = Id;
+      var nextId = Id;
       var items = new List<HistoricalDataMessage>();
       var source = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
 
       void subscribe(HistoricalDataMessage message)
       {
-        if (Equals(id, message.RequestId))
+        if (Equals(nextId, message.RequestId))
         {
           items.Add(message);
         }
@@ -174,7 +176,7 @@ namespace InteractiveBrokers
       {
         Instance.HistoricalData -= subscribe;
         Instance.HistoricalDataEnd -= unsubscribe;
-        Instance.ClientSocket.cancelHistoricalData(id);
+        Instance.ClientSocket.cancelHistoricalData(nextId);
         source.TrySetResult(true);
       }
 
@@ -182,9 +184,9 @@ namespace InteractiveBrokers
 
       Instance.HistoricalData += subscribe;
       Instance.HistoricalDataEnd += unsubscribe;
-      Instance.ClientSocket.reqHistoricalData(id, contract, maxDateStr, duration, barType, dataType, session, 1, false, null);
+      Instance.ClientSocket.reqHistoricalData(nextId, contract, maxDateStr, duration, barType, dataType, session, 1, false, null);
 
-      await await Task.WhenAny(source.Task, Task.Delay(Timeout).ContinueWith(o => unsubscribe(null)));
+      await await Task.WhenAny(source.Task, Task.Delay(Timeout, cleaner).ContinueWith(o => unsubscribe(null)));
       await Task.Delay(Span);
 
       return items;
@@ -193,7 +195,8 @@ namespace InteractiveBrokers
     /// <summary>
     /// Get orders
     /// </summary>
-    public virtual async Task<OpenOrderMessage[]> GetOrders()
+    /// <param name="cleaner"></param>
+    public virtual async Task<OpenOrderMessage[]> GetOrders(CancellationToken cleaner)
     {
       var orders = new ConcurrentDictionary<string, OpenOrderMessage>();
       var source = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -207,7 +210,6 @@ namespace InteractiveBrokers
       {
         Instance.OpenOrder -= subscribe;
         Instance.OpenOrderEnd -= unsubscribe;
-
         source.TrySetResult(true);
       }
 
@@ -215,7 +217,7 @@ namespace InteractiveBrokers
       Instance.OpenOrderEnd += unsubscribe;
       Instance.ClientSocket.reqAllOpenOrders();
 
-      await await Task.WhenAny(source.Task, Task.Delay(Timeout).ContinueWith(o => unsubscribe()));
+      await await Task.WhenAny(source.Task, Task.Delay(Timeout, cleaner).ContinueWith(o => unsubscribe()));
       await Task.Delay(Span);
 
       return orders.Values.ToArray();
@@ -224,16 +226,17 @@ namespace InteractiveBrokers
     /// <summary>
     /// Get positions 
     /// </summary>
-    /// <param name="criteria"></param>
-    public virtual async Task<PositionMultiMessage[]> GetPositions(string account)
+    /// <param name="cleaner"></param>
+    /// <param name="account"></param>
+    public virtual async Task<PositionMultiMessage[]> GetPositions(CancellationToken cleaner, string account)
     {
-      var id = Id;
+      var nextId = Id;
       var positions = new ConcurrentDictionary<string, PositionMultiMessage>();
       var source = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
 
       void subscribe(PositionMultiMessage message)
       {
-        if (Equals(id, message.ReqId))
+        if (Equals(nextId, message.ReqId))
         {
           positions[$"{message.Contract.LocalSymbol}"] = message;
         }
@@ -241,19 +244,20 @@ namespace InteractiveBrokers
 
       void unsubscribe(int reqId)
       {
-        if (Equals(id, reqId))
+        if (Equals(nextId, reqId))
         {
           Instance.PositionMulti -= subscribe;
           Instance.PositionMultiEnd -= unsubscribe;
-          Instance.ClientSocket.cancelPositionsMulti(id);
+          Instance.ClientSocket.cancelPositionsMulti(nextId);
+          source.TrySetResult(true);
         }
       }
 
       Instance.PositionMulti += subscribe;
       Instance.PositionMultiEnd += unsubscribe;
-      Instance.ClientSocket.reqPositionsMulti(id, account, string.Empty);
+      Instance.ClientSocket.reqPositionsMulti(nextId, account, string.Empty);
 
-      await await Task.WhenAny(source.Task, Task.Delay(Timeout).ContinueWith(o => unsubscribe(id)));
+      await await Task.WhenAny(source.Task, Task.Delay(Timeout, cleaner).ContinueWith(o => unsubscribe(nextId)));
       await Task.Delay(Span);
 
       return positions.Values.ToArray();
@@ -268,7 +272,7 @@ namespace InteractiveBrokers
     /// <param name="regSnapshot"></param>
     public virtual async Task<int> SubscribeToComputations(Contract contract, string dataType, bool snapshot = false, bool regSnapshot = false)
     {
-      var id = Id;
+      var nextId = Id;
       var response = new ComputationMessage();
 
       double? value(double data, double min, double max, double? original)
@@ -286,7 +290,7 @@ namespace InteractiveBrokers
 
       void subscribe(TickOptionMessage message)
       {
-        if (Equals(id, message.RequestId))
+        if (Equals(nextId, message.RequestId))
         {
           response.Delta = value(message.Delta, -1, 1, null);
           response.Gamma = value(message.Gamma, 0, short.MaxValue, null);
@@ -298,11 +302,11 @@ namespace InteractiveBrokers
       }
 
       Instance.TickOptionCommunication += subscribe;
-      Instance.ClientSocket.reqMktData(id, contract, dataType, snapshot, regSnapshot, null);
+      Instance.ClientSocket.reqMktData(nextId, contract, dataType, snapshot, regSnapshot, null);
 
       await Task.Delay(Span);
 
-      return id;
+      return nextId;
     }
 
     /// <summary>
@@ -314,12 +318,12 @@ namespace InteractiveBrokers
     /// <param name="regSnapshot"></param>
     public virtual async Task<int> SubscribeToTicks(Contract contract, string dataType, bool snapshot = false, bool regSnapshot = false)
     {
-      var id = Id;
+      var nextId = Id;
       var response = new PriceMessage();
 
       void subscribeToPrices(TickPriceMessage message)
       {
-        if (Equals(id, message.RequestId))
+        if (Equals(nextId, message.RequestId))
         {
           switch (message.Field)
           {
@@ -343,19 +347,20 @@ namespace InteractiveBrokers
       }
 
       Instance.TickPrice += subscribeToPrices;
-      Instance.ClientSocket.reqMktData(id, contract, dataType, snapshot, regSnapshot, null);
+      Instance.ClientSocket.reqMktData(nextId, contract, dataType, snapshot, regSnapshot, null);
 
       await Task.Delay(Span);
 
-      return id;
+      return nextId;
     }
 
     /// <summary>
     /// Sync open balance, order, and positions 
     /// </summary>
-    protected virtual async Task<Dictionary<string, string>> GetAccountSummary()
+    /// <param name="cleaner"></param>
+    protected virtual async Task<Dictionary<string, string>> GetAccountSummary(CancellationToken cleaner)
     {
-      var id = Id;
+      var nextId = Id;
       var response = new Dictionary<string, string>();
       var source = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
 
@@ -366,21 +371,20 @@ namespace InteractiveBrokers
 
       void unsubscribe(AccountSummaryEndMessage message)
       {
-        if (Equals(id, message?.RequestId))
+        if (Equals(nextId, message?.RequestId))
         {
           Instance.AccountSummary -= subscribe;
           Instance.AccountSummaryEnd -= unsubscribe;
-          Instance.ClientSocket.cancelAccountSummary(id);
-
+          Instance.ClientSocket.cancelAccountSummary(nextId);
           source.TrySetResult(true);
         }
       }
 
       Instance.AccountSummary += subscribe;
       Instance.AccountSummaryEnd += unsubscribe;
-      Instance.ClientSocket.reqAccountSummary(id, "All", AccountSummaryTags.GetAllTags());
+      Instance.ClientSocket.reqAccountSummary(nextId, "All", AccountSummaryTags.GetAllTags());
 
-      await await Task.WhenAny(source.Task, Task.Delay(Timeout).ContinueWith(o => unsubscribe(null)));
+      await await Task.WhenAny(source.Task, Task.Delay(Timeout, cleaner).ContinueWith(o => unsubscribe(null)));
       await Task.Delay(Span);
 
       return response;
@@ -389,27 +393,33 @@ namespace InteractiveBrokers
     /// <summary>
     /// Send order
     /// </summary>
+    /// <param name="cleaner"></param>
     /// <param name="contract"></param>
-    /// <param name="order"></param>
+    /// <param name="orderMessage"></param>
     /// <param name="stopPrice"></param>
     /// <param name="takePrice"></param>
-    public virtual async Task<IList<OpenOrderMessage>> SendOrder(Contract contract, Order order, double? stopPrice = null, double? takePrice = null)
+    public virtual async Task<IList<OpenOrderMessage>> SendOrder(CancellationToken cleaner, Contract contract, Order orderMessage, double? stopPrice = null, double? takePrice = null)
     {
+      var states = new List<Task>();
       var orderId = Instance.NextOrderId;
       var response = new Dictionary<int, OpenOrderMessage>();
-      var orders = CreateOrder(order, stopPrice, takePrice);
+      var orders = CreateOrder(orderMessage, stopPrice, takePrice);
 
-      foreach (var o in orders)
+      foreach (var order in orders.Where(o => o.Transmit is false))
+      {
+        Instance.ClientSocket.placeOrder(order.OrderId, contract, order);
+      }
+
+      foreach (var order in orders.Where(o => o.Transmit))
       {
         var source = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
 
         void subscribe(OpenOrderMessage message)
         {
-          if (Equals(o.OrderId, message.OrderId))
+          if (Equals(order.OrderId, message.OrderId))
           {
-            unsubscribe();
             response[message.OrderId] = message;
-            source.TrySetResult(true);
+            unsubscribe();
           }
         }
 
@@ -417,15 +427,18 @@ namespace InteractiveBrokers
         {
           Instance.OpenOrder -= subscribe;
           Instance.OpenOrderEnd -= unsubscribe;
+          source.TrySetResult(true);
         }
 
         Instance.OpenOrder += subscribe;
         Instance.OpenOrderEnd += unsubscribe;
-        Instance.ClientSocket.placeOrder(o.OrderId, contract, o);
+        Instance.ClientSocket.placeOrder(order.OrderId, contract, order);
 
-        await await Task.WhenAny(source.Task, Task.Delay(Timeout).ContinueWith(_ => unsubscribe()));
-        await Task.Delay(Span);
+        states.Add(source.Task);
       }
+
+      await await Task.WhenAny(Task.WhenAll(states), Task.Delay(Timeout, cleaner));
+      await Task.Delay(Span);
 
       return response.Values.ToArray();
     }
@@ -433,8 +446,9 @@ namespace InteractiveBrokers
     /// <summary>
     /// Cancel order
     /// </summary>
+    /// <param name="cleaner"></param>
     /// <param name="orderId"></param>
-    public virtual async Task<OrderStatusMessage> ClearOrder(int orderId)
+    public virtual async Task<OrderStatusMessage> ClearOrder(CancellationToken cleaner, int orderId)
     {
       var source = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
       var response = null as OrderStatusMessage;
@@ -457,7 +471,7 @@ namespace InteractiveBrokers
       Instance.OrderStatus += subscribe;
       Instance.ClientSocket.cancelOrder(orderId, string.Empty);
 
-      await await Task.WhenAny(source.Task, Task.Delay(Timeout).ContinueWith(o => unsubscribe()));
+      await await Task.WhenAny(source.Task, Task.Delay(Timeout, cleaner).ContinueWith(o => unsubscribe()));
       await Task.Delay(Span);
 
       return response;
