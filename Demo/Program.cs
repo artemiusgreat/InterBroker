@@ -53,8 +53,10 @@ namespace Demo
         order.LmtPrice - 50,
         order.LmtPrice + 50);
 
+      broker.OnPrice += price => Console.WriteLine(JsonSerializer.Serialize(price));
+
       var orderStatus = await broker.ClearOrder(orderResponse.Last().OrderId);
-      var subscriptionId = await broker.SubscribeToTicks(price => Console.WriteLine($"Price: {JsonSerializer.Serialize(price)}"), contract, "BID_ASK");
+      var subscriptionId = await broker.SubscribeToTicks(contract, "BID_ASK");
 
       Console.ReadKey();
 

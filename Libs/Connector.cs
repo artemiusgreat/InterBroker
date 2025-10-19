@@ -24,6 +24,9 @@ namespace InteractiveBrokers
     public virtual TimeSpan Span { get; set; } = TimeSpan.Zero;
     public virtual TimeSpan Timeout { get; set; } = TimeSpan.FromSeconds(5);
 
+    public Action<PriceMessage> OnPrice { get; set; } = o => { };
+    public Action<ComputationMessage> OnComputation { get; set; } = o => { };
+
     /// <summary>
     /// Connect
     /// </summary>
@@ -289,6 +292,8 @@ namespace InteractiveBrokers
           response.Gamma = value(message.Gamma, 0, short.MaxValue, null);
           response.Theta = value(message.Theta, 0, short.MaxValue, null);
           response.Vega = value(message.Vega, 0, short.MaxValue, null);
+
+          OnComputation(response);
         }
       }
 
@@ -307,10 +312,10 @@ namespace InteractiveBrokers
     /// <param name="dataType"></param>
     /// <param name="snapshot"></param>
     /// <param name="regSnapshot"></param>
-    public virtual async Task<int> SubscribeToTicks(Action<PriceMessage> action, Contract contract, string dataType, bool snapshot = false, bool regSnapshot = false)
+    public virtual async Task<int> SubscribeToTicks(Contract contract, string dataType, bool snapshot = false, bool regSnapshot = false)
     {
       var id = Id;
-      var price = new PriceMessage();
+      var response = new PriceMessage();
 
       void subscribeToPrices(TickPriceMessage message)
       {
@@ -318,22 +323,22 @@ namespace InteractiveBrokers
         {
           switch (message.Field)
           {
-            case (int)PropertyEnum.BidSize: price.BidSize = message.Data ?? price.BidSize; break;
-            case (int)PropertyEnum.AskSize: price.AskSize = message.Data ?? price.AskSize; break;
-            case (int)PropertyEnum.BidPrice: price.Bid = message.Data ?? price.Bid; break;
-            case (int)PropertyEnum.AskPrice: price.Ask = message.Data ?? price.Ask; break;
-            case (int)PropertyEnum.LastPrice: price.Last = message.Data ?? price.Last; break;
+            case (int)PropertyEnum.BidSize: response.BidSize = message.Data ?? response.BidSize; break;
+            case (int)PropertyEnum.AskSize: response.AskSize = message.Data ?? response.AskSize; break;
+            case (int)PropertyEnum.BidPrice: response.Bid = message.Data ?? response.Bid; break;
+            case (int)PropertyEnum.AskPrice: response.Ask = message.Data ?? response.Ask; break;
+            case (int)PropertyEnum.LastPrice: response.Last = message.Data ?? response.Last; break;
           }
 
-          price.Time = DateTime.Now.Ticks;
-          price.Last = price.Last is null ? price.Bid ?? price.Ask : price.Last;
+          response.Time = DateTime.Now.Ticks;
+          response.Last = response.Last is null ? response.Bid ?? response.Ask : response.Last;
 
-          if (price.Bid is null || price.Ask is null)
+          if (response.Bid is null || response.Ask is null)
           {
             return;
           }
 
-          action(price);
+          OnPrice(response);
         }
       }
 
