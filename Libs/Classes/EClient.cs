@@ -1,5 +1,7 @@
-/* Copyright (C) 2024 Interactive Brokers LLC. All rights reserved. This code is subject to the terms
+/* Copyright (C) 2025 Interactive Brokers LLC. All rights reserved. This code is subject to the terms
  * and conditions of the IB API Non-Commercial License or the IB API Commercial License, as applicable. */
+using Google.Protobuf;
+using IBApi.protobuf;
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -31,7 +33,6 @@ namespace IBApi
     internal bool UseV100Plus => useV100Plus;
 
     private string connectOptions = "";
-    protected bool allowRedirect;
 
     /**
      * @brief Constructor
@@ -55,7 +56,7 @@ namespace IBApi
     {
       if (IsConnected())
       {
-        wrapper.error(clientId, EClientErrors.AlreadyConnected.Code, EClientErrors.AlreadyConnected.Message, "");
+        wrapper.error(clientId, Util.CurrentTimeMillis(), EClientErrors.AlreadyConnected.Code, EClientErrors.AlreadyConnected.Message, "");
         return;
       }
 
@@ -80,12 +81,6 @@ namespace IBApi
      * @brief Reference to the EWrapper implementing object.
      */
     public EWrapper Wrapper => wrapper;
-
-    public bool AllowRedirect
-    {
-      get => allowRedirect;
-      set => allowRedirect = value;
-    }
 
     /**
      * @brief returns the Host's version. Some of the API functionality might not be available in older Hosts and therefore it is essential to keep the TWS/Gateway as up to date as possible.
@@ -133,7 +128,7 @@ namespace IBApi
       }
       catch (IOException)
       {
-        wrapper.error(clientId, EClientErrors.CONNECT_FAIL.Code, EClientErrors.CONNECT_FAIL.Message, "");
+        wrapper.error(clientId, Util.CurrentTimeMillis(), EClientErrors.CONNECT_FAIL.Code, EClientErrors.CONNECT_FAIL.Message, "");
         throw;
       }
     }
@@ -153,11 +148,23 @@ namespace IBApi
         throw new EClientException(EClientErrors.INVALID_SYMBOL, optionalCapabilities);
       }
     }
+
+    public static bool useProtoBuf(int serverVersion, OutgoingMessages outgoingMessage)
+    {
+      return Constants.PROTOBUF_MSG_IDS.TryGetValue(outgoingMessage, out int unifiedVersion) && unifiedVersion <= serverVersion;
+    }
+
     /**
      * @brief Initiates the message exchange between the client application and the TWS/IB Gateway
      */
     public void startApi()
     {
+      if (useProtoBuf(serverVersion, OutgoingMessages.StartApi))
+      {
+        startApiProtoBuf(EClientUtils.createStartApiRequestProto(clientId, optionalCapabilities));
+        return;
+      }
+
       if (!CheckConnection()) return;
 
       const int VERSION = 2;
@@ -166,7 +173,7 @@ namespace IBApi
 
       try
       {
-        paramsList.AddParameter(OutgoingMessages.StartApi);
+        paramsList.AddParameter(OutgoingMessages.StartApi, serverVersion);
         paramsList.AddParameter(VERSION);
         paramsList.AddParameter(clientId);
 
@@ -174,13 +181,34 @@ namespace IBApi
       }
       catch (EClientException e)
       {
-        wrapper.error(IncomingMessage.NotValid, e.Err.Code, e.Err.Message + e.Text, "");
+        wrapper.error(IncomingMessage.NotValid, Util.CurrentTimeMillis(), e.Err.Code, e.Err.Message + e.Text, "");
         return;
       }
 
-      CloseAndSend(paramsList, lengthPos);
+      CloseAndSend(paramsList, lengthPos, EClientErrors.FAIL_SEND_STARTAPI);
     }
 
+    public void startApiProtoBuf(protobuf.StartApiRequest startApiRequestProto)
+    {
+      if (startApiRequestProto == null) return;
+      if (!CheckConnection()) return;
+
+      var paramsList = new BinaryWriter(new MemoryStream());
+      var lengthPos = prepareBuffer(paramsList);
+
+      try
+      {
+        paramsList.AddParameter(OutgoingMessages.StartApi, serverVersion);
+        paramsList.AddParameter(startApiRequestProto.ToByteArray());
+      }
+      catch (EClientException e)
+      {
+        wrapper.error(IncomingMessage.NotValid, Util.CurrentTimeMillis(), e.Err.Code, e.Err.Message + e.Text, "");
+        return;
+      }
+
+      CloseAndSend(paramsList, lengthPos, EClientErrors.FAIL_SEND_STARTAPI);
+    }
 
     public string optionalCapabilities { get; set; }
 
@@ -218,14 +246,34 @@ namespace IBApi
      */
     public void reqCompletedOrders(bool apiOnly)
     {
+      if (useProtoBuf(serverVersion, OutgoingMessages.ReqCompletedOrders))
+      {
+        reqCompletedOrdersProtoBuf(EClientUtils.createCompletedOrdersRequestProto(apiOnly));
+        return;
+      }
+
       if (!CheckConnection()) return;
       if (!CheckServerVersion(MinServerVer.COMPLETED_ORDERS, " It does not support completed orders requests.")) return;
 
       var paramsList = new BinaryWriter(new MemoryStream());
       var lengthPos = prepareBuffer(paramsList);
 
-      paramsList.AddParameter(OutgoingMessages.ReqCompletedOrders);
+      paramsList.AddParameter(OutgoingMessages.ReqCompletedOrders, serverVersion);
       paramsList.AddParameter(apiOnly);
+
+      CloseAndSend(paramsList, lengthPos, EClientErrors.FAIL_SEND_REQCOMPLETEDORDERS);
+    }
+
+    public void reqCompletedOrdersProtoBuf(protobuf.CompletedOrdersRequest completedOrdersRequestProto)
+    {
+      if (completedOrdersRequestProto == null) return;
+      if (!CheckConnection()) return;
+
+      var paramsList = new BinaryWriter(new MemoryStream());
+      var lengthPos = prepareBuffer(paramsList);
+
+      paramsList.AddParameter(OutgoingMessages.ReqCompletedOrders, serverVersion);
+      paramsList.AddParameter(completedOrdersRequestProto.ToByteArray());
 
       CloseAndSend(paramsList, lengthPos, EClientErrors.FAIL_SEND_REQCOMPLETEDORDERS);
     }
@@ -236,16 +284,46 @@ namespace IBApi
      */
     public void cancelTickByTickData(int requestId)
     {
+      if (useProtoBuf(serverVersion, OutgoingMessages.CancelTickByTickData))
+      {
+        cancelTickByTickDataProtoBuf(EClientUtils.createCancelTickByTickProto(requestId));
+        return;
+      }
+
       if (!CheckConnection()) return;
       if (!CheckServerVersion(MinServerVer.TICK_BY_TICK, " It does not support tick-by-tick cancels.")) return;
 
       var paramsList = new BinaryWriter(new MemoryStream());
       var lengthPos = prepareBuffer(paramsList);
 
-      paramsList.AddParameter(OutgoingMessages.CancelTickByTickData);
+      paramsList.AddParameter(OutgoingMessages.CancelTickByTickData, serverVersion);
       paramsList.AddParameter(requestId);
 
       CloseAndSend(requestId, paramsList, lengthPos, EClientErrors.FAIL_SEND_CANCELTICKBYTICKDATA);
+    }
+
+    public void cancelTickByTickDataProtoBuf(protobuf.CancelTickByTick cancelTickByTickProto)
+    {
+      if (cancelTickByTickProto == null) return;
+      if (!CheckConnection()) return;
+
+      var paramsList = new BinaryWriter(new MemoryStream());
+      var lengthPos = prepareBuffer(paramsList);
+
+      int reqId = cancelTickByTickProto.HasReqId ? cancelTickByTickProto.ReqId : IncomingMessage.NotValid;
+
+      try
+      {
+        paramsList.AddParameter(OutgoingMessages.CancelTickByTickData, serverVersion);
+        paramsList.AddParameter(cancelTickByTickProto.ToByteArray());
+      }
+      catch (EClientException e)
+      {
+        wrapper.error(reqId, Util.CurrentTimeMillis(), e.Err.Code, e.Err.Message + e.Text, "");
+        return;
+      }
+
+      CloseAndSend(reqId, paramsList, lengthPos, EClientErrors.FAIL_SEND_CANCELTICKBYTICKDATA);
     }
 
     /**
@@ -259,6 +337,12 @@ namespace IBApi
      */
     public void reqTickByTickData(int requestId, Contract contract, string tickType, int numberOfTicks, bool ignoreSize)
     {
+      if (useProtoBuf(serverVersion, OutgoingMessages.ReqTickByTickData))
+      {
+        reqTickByTickDataProtoBuf(EClientUtils.createTickByTickRequestProto(requestId, contract, tickType, numberOfTicks, ignoreSize));
+        return;
+      }
+
       if (!CheckConnection()) return;
       if (!CheckServerVersion(MinServerVer.TICK_BY_TICK, " It does not support tick-by-tick requests.")) return;
       if ((numberOfTicks != 0 || ignoreSize) && !CheckServerVersion(MinServerVer.TICK_BY_TICK_IGNORE_SIZE, " It does not support ignoreSize and numberOfTicks parameters in tick-by-tick requests.")) return;
@@ -268,13 +352,13 @@ namespace IBApi
 
       try
       {
-        paramsList.AddParameter(OutgoingMessages.ReqTickByTickData);
+        paramsList.AddParameter(OutgoingMessages.ReqTickByTickData, serverVersion);
         paramsList.AddParameter(requestId);
         paramsList.AddParameter(contract.ConId);
         paramsList.AddParameter(contract.Symbol);
         paramsList.AddParameter(contract.SecType);
         paramsList.AddParameter(contract.LastTradeDateOrContractMonth);
-        paramsList.AddParameter(contract.Strike);
+        paramsList.AddParameterMax(contract.Strike);
         paramsList.AddParameter(contract.Right);
         paramsList.AddParameter(contract.Multiplier);
         paramsList.AddParameter(contract.Exchange);
@@ -292,11 +376,35 @@ namespace IBApi
       }
       catch (EClientException e)
       {
-        wrapper.error(requestId, e.Err.Code, e.Err.Message + e.Text, "");
+        wrapper.error(requestId, Util.CurrentTimeMillis(), e.Err.Code, e.Err.Message + e.Text, "");
         return;
       }
 
       CloseAndSend(requestId, paramsList, lengthPos, EClientErrors.FAIL_SEND_REQTICKBYTICKDATA);
+    }
+
+    public void reqTickByTickDataProtoBuf(protobuf.TickByTickRequest tickByTickRequestProto)
+    {
+      if (tickByTickRequestProto == null) return;
+      if (!CheckConnection()) return;
+
+      var paramsList = new BinaryWriter(new MemoryStream());
+      var lengthPos = prepareBuffer(paramsList);
+
+      int reqId = tickByTickRequestProto.HasReqId ? tickByTickRequestProto.ReqId : IncomingMessage.NotValid;
+
+      try
+      {
+        paramsList.AddParameter(OutgoingMessages.ReqTickByTickData, serverVersion);
+        paramsList.AddParameter(tickByTickRequestProto.ToByteArray());
+      }
+      catch (EClientException e)
+      {
+        wrapper.error(reqId, Util.CurrentTimeMillis(), e.Err.Code, e.Err.Message + e.Text, "");
+        return;
+      }
+
+      CloseAndSend(reqId, paramsList, lengthPos, EClientErrors.FAIL_SEND_REQTICKBYTICKDATA);
     }
 
     /**
@@ -306,11 +414,41 @@ namespace IBApi
      */
     public void cancelHistoricalData(int reqId)
     {
+      if (useProtoBuf(serverVersion, OutgoingMessages.CancelHistoricalData))
+      {
+        cancelHistoricalDataProtoBuf(EClientUtils.createCancelHistoricalDataProto(reqId));
+        return;
+      }
+
       if (!CheckConnection()) return;
-      if (!CheckServerVersion(24, " It does not support historical data cancelations.")) return;
+      if (!CheckServerVersion(24, " It does not support historical data cancellations.")) return;
       const int VERSION = 1;
       //No server version validation takes place here since minimum is already higher
-      SendCancelRequest(OutgoingMessages.CancelHistoricalData, VERSION, reqId, EClientErrors.FAIL_SEND_CANHISTDATA);
+      SendCancelRequest(OutgoingMessages.CancelHistoricalData, VERSION, reqId, EClientErrors.FAIL_SEND_CANHISTDATA, serverVersion);
+    }
+
+    public void cancelHistoricalDataProtoBuf(protobuf.CancelHistoricalData cancelHistoricalDataProto)
+    {
+      if (cancelHistoricalDataProto == null) return;
+      if (!CheckConnection()) return;
+
+      var paramsList = new BinaryWriter(new MemoryStream());
+      var lengthPos = prepareBuffer(paramsList);
+
+      int reqId = cancelHistoricalDataProto.HasReqId ? cancelHistoricalDataProto.ReqId : IncomingMessage.NotValid;
+
+      try
+      {
+        paramsList.AddParameter(OutgoingMessages.CancelHistoricalData, serverVersion);
+        paramsList.AddParameter(cancelHistoricalDataProto.ToByteArray());
+      }
+      catch (EClientException e)
+      {
+        wrapper.error(reqId, Util.CurrentTimeMillis(), e.Err.Code, e.Err.Message + e.Text, "");
+        return;
+      }
+
+      CloseAndSend(reqId, paramsList, lengthPos, EClientErrors.FAIL_SEND_CANHISTDATA);
     }
 
     /**
@@ -326,6 +464,12 @@ namespace IBApi
         //reserved for future use, must be blank
         List<TagValue> impliedVolatilityOptions)
     {
+      if (useProtoBuf(serverVersion, OutgoingMessages.ReqCalcImpliedVolat))
+      {
+        calculateImpliedVolatilityProtoBuf(EClientUtils.createCalculateImpliedVolatilityRequestProto(reqId, contract, optionPrice, underPrice, impliedVolatilityOptions));
+        return;
+      }
+
       if (!CheckConnection()) return;
       if (!CheckServerVersion(MinServerVer.REQ_CALC_IMPLIED_VOLAT, " It does not support calculate implied volatility.")) return;
       if (!Util.StringIsEmpty(contract.TradingClass) && !CheckServerVersion(MinServerVer.TRADING_CLASS, "")) return;
@@ -336,14 +480,14 @@ namespace IBApi
 
       try
       {
-        paramsList.AddParameter(OutgoingMessages.ReqCalcImpliedVolat);
+        paramsList.AddParameter(OutgoingMessages.ReqCalcImpliedVolat, serverVersion);
         paramsList.AddParameter(version);
         paramsList.AddParameter(reqId);
         paramsList.AddParameter(contract.ConId);
         paramsList.AddParameter(contract.Symbol);
         paramsList.AddParameter(contract.SecType);
         paramsList.AddParameter(contract.LastTradeDateOrContractMonth);
-        paramsList.AddParameter(contract.Strike);
+        paramsList.AddParameterMax(contract.Strike);
         paramsList.AddParameter(contract.Right);
         paramsList.AddParameter(contract.Multiplier);
         paramsList.AddParameter(contract.Exchange);
@@ -357,7 +501,31 @@ namespace IBApi
       }
       catch (EClientException e)
       {
-        wrapper.error(reqId, e.Err.Code, e.Err.Message + e.Text, "");
+        wrapper.error(reqId, Util.CurrentTimeMillis(), e.Err.Code, e.Err.Message + e.Text, "");
+        return;
+      }
+
+      CloseAndSend(reqId, paramsList, lengthPos, EClientErrors.FAIL_SEND_REQCALCIMPLIEDVOLAT);
+    }
+
+    public void calculateImpliedVolatilityProtoBuf(protobuf.CalculateImpliedVolatilityRequest calculateImpliedVolatilityRequestProto)
+    {
+      if (calculateImpliedVolatilityRequestProto == null) return;
+      if (!CheckConnection()) return;
+
+      var paramsList = new BinaryWriter(new MemoryStream());
+      var lengthPos = prepareBuffer(paramsList);
+
+      int reqId = calculateImpliedVolatilityRequestProto.HasReqId ? calculateImpliedVolatilityRequestProto.ReqId : IncomingMessage.NotValid;
+
+      try
+      {
+        paramsList.AddParameter(OutgoingMessages.ReqCalcImpliedVolat, serverVersion);
+        paramsList.AddParameter(calculateImpliedVolatilityRequestProto.ToByteArray());
+      }
+      catch (EClientException e)
+      {
+        wrapper.error(reqId, Util.CurrentTimeMillis(), e.Err.Code, e.Err.Message + e.Text, "");
         return;
       }
 
@@ -377,6 +545,12 @@ namespace IBApi
         //reserved for future use, must be blank
         List<TagValue> optionPriceOptions)
     {
+      if (useProtoBuf(serverVersion, OutgoingMessages.ReqCalcOptionPrice))
+      {
+        calculateOptionPriceProtoBuf(EClientUtils.createCalculateOptionPriceRequestProto(reqId, contract, volatility, underPrice, optionPriceOptions));
+        return;
+      }
+
       if (!CheckConnection()) return;
       if (!CheckServerVersion(MinServerVer.REQ_CALC_OPTION_PRICE, " It does not support calculation price requests.")) return;
       if (!Util.StringIsEmpty(contract.TradingClass) && !CheckServerVersion(MinServerVer.REQ_CALC_OPTION_PRICE, " It does not support tradingClass parameter in calculateOptionPrice.")) return;
@@ -387,14 +561,14 @@ namespace IBApi
 
       try
       {
-        paramsList.AddParameter(OutgoingMessages.ReqCalcOptionPrice);
+        paramsList.AddParameter(OutgoingMessages.ReqCalcOptionPrice, serverVersion);
         paramsList.AddParameter(version);
         paramsList.AddParameter(reqId);
         paramsList.AddParameter(contract.ConId);
         paramsList.AddParameter(contract.Symbol);
         paramsList.AddParameter(contract.SecType);
         paramsList.AddParameter(contract.LastTradeDateOrContractMonth);
-        paramsList.AddParameter(contract.Strike);
+        paramsList.AddParameterMax(contract.Strike);
         paramsList.AddParameter(contract.Right);
         paramsList.AddParameter(contract.Multiplier);
         paramsList.AddParameter(contract.Exchange);
@@ -408,7 +582,31 @@ namespace IBApi
       }
       catch (EClientException e)
       {
-        wrapper.error(reqId, e.Err.Code, e.Err.Message + e.Text, "");
+        wrapper.error(reqId, Util.CurrentTimeMillis(), e.Err.Code, e.Err.Message + e.Text, "");
+        return;
+      }
+
+      CloseAndSend(reqId, paramsList, lengthPos, EClientErrors.FAIL_SEND_REQCALCOPTIONPRICE);
+    }
+
+    public void calculateOptionPriceProtoBuf(protobuf.CalculateOptionPriceRequest calculateOptionPriceRequestProto)
+    {
+      if (calculateOptionPriceRequestProto == null) return;
+      if (!CheckConnection()) return;
+
+      var paramsList = new BinaryWriter(new MemoryStream());
+      var lengthPos = prepareBuffer(paramsList);
+
+      int reqId = calculateOptionPriceRequestProto.HasReqId ? calculateOptionPriceRequestProto.ReqId : IncomingMessage.NotValid;
+
+      try
+      {
+        paramsList.AddParameter(OutgoingMessages.ReqCalcOptionPrice, serverVersion);
+        paramsList.AddParameter(calculateOptionPriceRequestProto.ToByteArray());
+      }
+      catch (EClientException e)
+      {
+        wrapper.error(reqId, Util.CurrentTimeMillis(), e.Err.Code, e.Err.Message + e.Text, "");
         return;
       }
 
@@ -423,9 +621,39 @@ namespace IBApi
      */
     public void cancelAccountSummary(int reqId)
     {
+      if (useProtoBuf(serverVersion, OutgoingMessages.CancelAccountSummary))
+      {
+        cancelAccountSummaryProtoBuf(EClientUtils.createCancelAccountSummaryRequestProto(reqId));
+        return;
+      }
+
       if (!CheckConnection()) return;
       if (!CheckServerVersion(MinServerVer.ACCT_SUMMARY, " It does not support account summary cancellation.")) return;
-      SendCancelRequest(OutgoingMessages.CancelAccountSummary, 1, reqId, EClientErrors.FAIL_SEND_CANACCOUNTDATA);
+      SendCancelRequest(OutgoingMessages.CancelAccountSummary, 1, reqId, EClientErrors.FAIL_SEND_CANACCOUNTDATA, serverVersion);
+    }
+
+    public void cancelAccountSummaryProtoBuf(protobuf.CancelAccountSummary cancelAccountSummaryProto)
+    {
+      if (cancelAccountSummaryProto == null) return;
+      if (!CheckConnection()) return;
+
+      var paramsList = new BinaryWriter(new MemoryStream());
+      var lengthPos = prepareBuffer(paramsList);
+
+      int reqId = cancelAccountSummaryProto.HasReqId ? cancelAccountSummaryProto.ReqId : IncomingMessage.NotValid;
+
+      try
+      {
+        paramsList.AddParameter(OutgoingMessages.CancelAccountSummary, serverVersion);
+        paramsList.AddParameter(cancelAccountSummaryProto.ToByteArray());
+      }
+      catch (EClientException e)
+      {
+        wrapper.error(reqId, Util.CurrentTimeMillis(), e.Err.Code, e.Err.Message + e.Text, "");
+        return;
+      }
+
+      CloseAndSend(reqId, paramsList, lengthPos, EClientErrors.FAIL_SEND_CANACCOUNTDATA);
     }
 
     /**
@@ -435,9 +663,39 @@ namespace IBApi
      */
     public void cancelCalculateImpliedVolatility(int reqId)
     {
+      if (useProtoBuf(serverVersion, OutgoingMessages.CancelImpliedVolatility))
+      {
+        cancelCalculateImpliedVolatilityProtoBuf(EClientUtils.createCancelCalculateImpliedVolatilityProto(reqId));
+        return;
+      }
+
       if (!CheckConnection()) return;
       if (!CheckServerVersion(MinServerVer.CANCEL_CALC_IMPLIED_VOLAT, " It does not support calculate implied volatility cancellation.")) return;
-      SendCancelRequest(OutgoingMessages.CancelImpliedVolatility, 1, reqId, EClientErrors.FAIL_SEND_CANCALCIMPLIEDVOLAT);
+      SendCancelRequest(OutgoingMessages.CancelImpliedVolatility, 1, reqId, EClientErrors.FAIL_SEND_CANCALCIMPLIEDVOLAT, serverVersion);
+    }
+
+    public void cancelCalculateImpliedVolatilityProtoBuf(protobuf.CancelCalculateImpliedVolatility cancelCalculateImpliedVolatilityProto)
+    {
+      if (cancelCalculateImpliedVolatilityProto == null) return;
+      if (!CheckConnection()) return;
+
+      var paramsList = new BinaryWriter(new MemoryStream());
+      var lengthPos = prepareBuffer(paramsList);
+
+      int reqId = cancelCalculateImpliedVolatilityProto.HasReqId ? cancelCalculateImpliedVolatilityProto.ReqId : IncomingMessage.NotValid;
+
+      try
+      {
+        paramsList.AddParameter(OutgoingMessages.CancelImpliedVolatility, serverVersion);
+        paramsList.AddParameter(cancelCalculateImpliedVolatilityProto.ToByteArray());
+      }
+      catch (EClientException e)
+      {
+        wrapper.error(reqId, Util.CurrentTimeMillis(), e.Err.Code, e.Err.Message + e.Text, "");
+        return;
+      }
+
+      CloseAndSend(reqId, paramsList, lengthPos, EClientErrors.FAIL_SEND_CANCALCIMPLIEDVOLAT);
     }
 
     /**
@@ -447,9 +705,39 @@ namespace IBApi
      */
     public void cancelCalculateOptionPrice(int reqId)
     {
+      if (useProtoBuf(serverVersion, OutgoingMessages.CancelOptionPrice))
+      {
+        cancelCalculateOptionPriceProtoBuf(EClientUtils.createCancelCalculateOptionPriceProto(reqId));
+        return;
+      }
+
       if (!CheckConnection()) return;
       if (!CheckServerVersion(MinServerVer.CANCEL_CALC_OPTION_PRICE, " It does not support calculate option price cancellation.")) return;
-      SendCancelRequest(OutgoingMessages.CancelOptionPrice, 1, reqId, EClientErrors.FAIL_SEND_CANCALCOPTIONPRICE);
+      SendCancelRequest(OutgoingMessages.CancelOptionPrice, 1, reqId, EClientErrors.FAIL_SEND_CANCALCOPTIONPRICE, serverVersion);
+    }
+
+    public void cancelCalculateOptionPriceProtoBuf(protobuf.CancelCalculateOptionPrice cancelCalculateOptionPriceProto)
+    {
+      if (cancelCalculateOptionPriceProto == null) return;
+      if (!CheckConnection()) return;
+
+      var paramsList = new BinaryWriter(new MemoryStream());
+      var lengthPos = prepareBuffer(paramsList);
+
+      int reqId = cancelCalculateOptionPriceProto.HasReqId ? cancelCalculateOptionPriceProto.ReqId : IncomingMessage.NotValid;
+
+      try
+      {
+        paramsList.AddParameter(OutgoingMessages.CancelOptionPrice, serverVersion);
+        paramsList.AddParameter(cancelCalculateOptionPriceProto.ToByteArray());
+      }
+      catch (EClientException e)
+      {
+        wrapper.error(reqId, Util.CurrentTimeMillis(), e.Err.Code, e.Err.Message + e.Text, "");
+        return;
+      }
+
+      CloseAndSend(reqId, paramsList, lengthPos, EClientErrors.FAIL_SEND_CANCALCOPTIONPRICE);
     }
 
     /**
@@ -459,9 +747,39 @@ namespace IBApi
      */
     public void cancelFundamentalData(int reqId)
     {
+      if (useProtoBuf(serverVersion, OutgoingMessages.CancelFundamentalData))
+      {
+        cancelFundamentalsDataProtoBuf(EClientUtils.createCancelFundamentalsDataProto(reqId));
+        return;
+      }
+
       if (!CheckConnection()) return;
       if (!CheckServerVersion(MinServerVer.FUNDAMENTAL_DATA, " It does not support fundamental data requests.")) return;
-      SendCancelRequest(OutgoingMessages.CancelFundamentalData, 1, reqId, EClientErrors.FAIL_SEND_CANFUNDDATA);
+      SendCancelRequest(OutgoingMessages.CancelFundamentalData, 1, reqId, EClientErrors.FAIL_SEND_CANFUNDDATA, serverVersion);
+    }
+
+    public void cancelFundamentalsDataProtoBuf(protobuf.CancelFundamentalsData cancelFundamentalsDataProto)
+    {
+      if (cancelFundamentalsDataProto == null) return;
+      if (!CheckConnection()) return;
+
+      var paramsList = new BinaryWriter(new MemoryStream());
+      var lengthPos = prepareBuffer(paramsList);
+
+      int reqId = cancelFundamentalsDataProto.HasReqId ? cancelFundamentalsDataProto.ReqId : IncomingMessage.NotValid;
+
+      try
+      {
+        paramsList.AddParameter(OutgoingMessages.CancelFundamentalData, serverVersion);
+        paramsList.AddParameter(cancelFundamentalsDataProto.ToByteArray());
+      }
+      catch (EClientException e)
+      {
+        wrapper.error(reqId, Util.CurrentTimeMillis(), e.Err.Code, e.Err.Message + e.Text, "");
+        return;
+      }
+
+      CloseAndSend(reqId, paramsList, lengthPos, EClientErrors.FAIL_SEND_CANFUNDDATA);
     }
 
     /**
@@ -471,9 +789,39 @@ namespace IBApi
      */
     public void cancelMktData(int tickerId)
     {
+      if (useProtoBuf(serverVersion, OutgoingMessages.CancelMarketData))
+      {
+        cancelMarketDataProtoBuf(EClientUtils.createCancelMarketDataProto(tickerId));
+        return;
+      }
+
       if (!CheckConnection()) return;
 
-      SendCancelRequest(OutgoingMessages.CancelMarketData, 1, tickerId, EClientErrors.FAIL_SEND_CANMKT);
+      SendCancelRequest(OutgoingMessages.CancelMarketData, 1, tickerId, EClientErrors.FAIL_SEND_CANMKT, serverVersion);
+    }
+
+    public void cancelMarketDataProtoBuf(protobuf.CancelMarketData cancelMarketDataProto)
+    {
+      if (cancelMarketDataProto == null) return;
+      if (!CheckConnection()) return;
+
+      var paramsList = new BinaryWriter(new MemoryStream());
+      var lengthPos = prepareBuffer(paramsList);
+
+      int reqId = cancelMarketDataProto.HasReqId ? cancelMarketDataProto.ReqId : IncomingMessage.NotValid;
+
+      try
+      {
+        paramsList.AddParameter(OutgoingMessages.CancelMarketData, serverVersion);
+        paramsList.AddParameter(cancelMarketDataProto.ToByteArray());
+      }
+      catch (EClientException e)
+      {
+        wrapper.error(reqId, Util.CurrentTimeMillis(), e.Err.Code, e.Err.Message + e.Text, "");
+        return;
+      }
+
+      CloseAndSend(reqId, paramsList, lengthPos, EClientErrors.FAIL_SEND_CANMKT);
     }
 
     /**
@@ -483,6 +831,12 @@ namespace IBApi
      */
     public void cancelMktDepth(int tickerId, bool isSmartDepth)
     {
+      if (useProtoBuf(serverVersion, OutgoingMessages.CancelMarketDepth))
+      {
+        cancelMarketDepthProtoBuf(EClientUtils.createCancelMarketDepthProto(tickerId, isSmartDepth));
+        return;
+      }
+
       if (!CheckConnection()) return;
 
       if (isSmartDepth && !CheckServerVersion(tickerId, MinServerVer.SMART_DEPTH, " It does not support SMART depth cancel.")) return;
@@ -491,12 +845,36 @@ namespace IBApi
       var paramsList = new BinaryWriter(new MemoryStream());
       var lengthPos = prepareBuffer(paramsList);
 
-      paramsList.AddParameter(OutgoingMessages.CancelMarketDepth);
+      paramsList.AddParameter(OutgoingMessages.CancelMarketDepth, serverVersion);
       paramsList.AddParameter(VERSION);
       paramsList.AddParameter(tickerId);
       if (serverVersion >= MinServerVer.SMART_DEPTH) paramsList.AddParameter(isSmartDepth);
 
       CloseAndSend(tickerId, paramsList, lengthPos, EClientErrors.FAIL_SEND_CANMKTDEPTH);
+    }
+
+    public void cancelMarketDepthProtoBuf(protobuf.CancelMarketDepth cancelMarketDepthProto)
+    {
+      if (cancelMarketDepthProto == null) return;
+      if (!CheckConnection()) return;
+
+      var paramsList = new BinaryWriter(new MemoryStream());
+      var lengthPos = prepareBuffer(paramsList);
+
+      int reqId = cancelMarketDepthProto.HasReqId ? cancelMarketDepthProto.ReqId : IncomingMessage.NotValid;
+
+      try
+      {
+        paramsList.AddParameter(OutgoingMessages.CancelMarketDepth, serverVersion);
+        paramsList.AddParameter(cancelMarketDepthProto.ToByteArray());
+      }
+      catch (EClientException e)
+      {
+        wrapper.error(reqId, Util.CurrentTimeMillis(), e.Err.Code, e.Err.Message + e.Text, "");
+        return;
+      }
+
+      CloseAndSend(reqId, paramsList, lengthPos, EClientErrors.FAIL_SEND_CANMKTDEPTH);
     }
 
     /**
@@ -505,8 +883,28 @@ namespace IBApi
      */
     public void cancelNewsBulletin()
     {
+      if (useProtoBuf(serverVersion, OutgoingMessages.CancelNewsBulletin))
+      {
+        cancelNewsBulletinsProtoBuf(EClientUtils.createCancelNewsBulletinsProto());
+        return;
+      }
+
       if (!CheckConnection()) return;
-      SendCancelRequest(OutgoingMessages.CancelNewsBulletin, 1, EClientErrors.FAIL_SEND_CORDER);
+      SendCancelRequest(OutgoingMessages.CancelNewsBulletin, 1, EClientErrors.FAIL_SEND_CORDER, serverVersion);
+    }
+
+    public void cancelNewsBulletinsProtoBuf(protobuf.CancelNewsBulletins cancelNewsBulletinsProto)
+    {
+      if (cancelNewsBulletinsProto == null) return;
+      if (!CheckConnection()) return;
+
+      var paramsList = new BinaryWriter(new MemoryStream());
+      var lengthPos = prepareBuffer(paramsList);
+
+      paramsList.AddParameter(OutgoingMessages.CancelNewsBulletin, serverVersion);
+      paramsList.AddParameter(cancelNewsBulletinsProto.ToByteArray());
+
+      CloseAndSend(paramsList, lengthPos, EClientErrors.FAIL_SEND_CORDER);
     }
 
     /**
@@ -515,10 +913,20 @@ namespace IBApi
      * @param orderId the order's client id
      * @sa placeOrder, reqGlobalCancel
      */
-    public void cancelOrder(int orderId, string manualOrderCancelTime)
+    public void cancelOrder(int orderId, OrderCancel orderCancel)
     {
+      if (useProtoBuf(serverVersion, OutgoingMessages.CancelOrder))
+      {
+        cancelOrderProtoBuf(EClientUtils.createCancelOrderRequestProto(orderId, orderCancel));
+        return;
+      }
+
       if (!CheckConnection()) return;
-      if (!IsEmpty(manualOrderCancelTime) && !CheckServerVersion(orderId, MinServerVer.MANUAL_ORDER_TIME, " It does not support manual order cancel time attribute")) return;
+      if (!IsEmpty(orderCancel.ManualOrderCancelTime) &&
+          !CheckServerVersion(orderId, MinServerVer.MANUAL_ORDER_TIME, " It does not support manual order cancel time attribute")) return;
+
+      if ((!IsEmpty(orderCancel.ExtOperator) || orderCancel.ManualOrderIndicator != int.MaxValue) &&
+          !CheckServerVersion(orderId, MinServerVer.MIN_SERVER_VER_CME_TAGGING_FIELDS, " It does not support ext operator and manual order indicator parameters")) return;
 
       const int VERSION = 1;
       var paramsList = new BinaryWriter(new MemoryStream());
@@ -526,18 +934,61 @@ namespace IBApi
 
       try
       {
-        paramsList.AddParameter(OutgoingMessages.CancelOrder);
-        paramsList.AddParameter(VERSION);
+        paramsList.AddParameter(OutgoingMessages.CancelOrder, serverVersion);
+        if (serverVersion < MinServerVer.MIN_SERVER_VER_CME_TAGGING_FIELDS)
+        {
+          paramsList.AddParameter(VERSION);
+        }
         paramsList.AddParameter(orderId);
-        if (serverVersion >= MinServerVer.MANUAL_ORDER_TIME) paramsList.AddParameter(manualOrderCancelTime);
+        if (serverVersion >= MinServerVer.MANUAL_ORDER_TIME) paramsList.AddParameter(orderCancel.ManualOrderCancelTime);
+
+        if (serverVersion >= MinServerVer.MIN_SERVER_VER_RFQ_FIELDS && serverVersion < MinServerVer.MIN_SERVER_VER_UNDO_RFQ_FIELDS)
+        {
+          paramsList.AddParameter("");
+          paramsList.AddParameter("");
+          paramsList.AddParameter(int.MaxValue);
+        }
+        if (serverVersion >= MinServerVer.MIN_SERVER_VER_CME_TAGGING_FIELDS)
+        {
+          paramsList.AddParameter(orderCancel.ExtOperator);
+          paramsList.AddParameter(orderCancel.ManualOrderIndicator);
+        }
       }
       catch (EClientException e)
       {
-        wrapper.error(orderId, e.Err.Code, e.Err.Message + e.Text, "");
+        wrapper.error(orderId, Util.CurrentTimeMillis(), e.Err.Code, e.Err.Message + e.Text, "");
         return;
       }
 
-      CloseAndSend(paramsList, lengthPos, EClientErrors.FAIL_SEND_CANCELPNL);
+      CloseAndSend(paramsList, lengthPos, EClientErrors.FAIL_SEND_CORDER);
+    }
+
+    public void cancelOrderProtoBuf(protobuf.CancelOrderRequest cancelOrderRequestProto)
+    {
+      if (cancelOrderRequestProto == null)
+      {
+        return;
+      }
+
+      if (!CheckConnection()) return;
+
+      var paramsList = new BinaryWriter(new MemoryStream());
+      var lengthPos = prepareBuffer(paramsList);
+
+      int orderId = cancelOrderRequestProto.HasOrderId ? cancelOrderRequestProto.OrderId : int.MaxValue;
+
+      try
+      {
+        paramsList.AddParameter(OutgoingMessages.CancelOrder, serverVersion);
+        paramsList.AddParameter(cancelOrderRequestProto.ToByteArray());
+      }
+      catch (EClientException e)
+      {
+        wrapper.error(orderId, Util.CurrentTimeMillis(), e.Err.Code, e.Err.Message + e.Text, "");
+        return;
+      }
+
+      CloseAndSend(orderId, paramsList, lengthPos, EClientErrors.FAIL_SEND_CORDER);
     }
 
     /**
@@ -546,10 +997,38 @@ namespace IBApi
      */
     public void cancelPositions()
     {
+      if (useProtoBuf(serverVersion, OutgoingMessages.CancelPositions))
+      {
+        cancelPositionsProtoBuf(EClientUtils.createCancelPositionsRequestProto());
+        return;
+      }
+
       if (!CheckConnection()) return;
       if (!CheckServerVersion(MinServerVer.ACCT_SUMMARY, " It does not support position cancellation.")) return;
 
-      SendCancelRequest(OutgoingMessages.CancelPositions, 1, EClientErrors.FAIL_SEND_CANPOSITIONS);
+      SendCancelRequest(OutgoingMessages.CancelPositions, 1, EClientErrors.FAIL_SEND_CANPOSITIONS, serverVersion);
+    }
+
+    public void cancelPositionsProtoBuf(protobuf.CancelPositions cancelPositionsProto)
+    {
+      if (cancelPositionsProto == null) return;
+      if (!CheckConnection()) return;
+
+      var paramsList = new BinaryWriter(new MemoryStream());
+      var lengthPos = prepareBuffer(paramsList);
+
+      try
+      {
+        paramsList.AddParameter(OutgoingMessages.CancelPositions, serverVersion);
+        paramsList.AddParameter(cancelPositionsProto.ToByteArray());
+      }
+      catch (EClientException e)
+      {
+        wrapper.error(IncomingMessage.NotValid, Util.CurrentTimeMillis(), e.Err.Code, e.Err.Message + e.Text, "");
+        return;
+      }
+
+      CloseAndSend(paramsList, lengthPos, EClientErrors.FAIL_SEND_CANPOSITIONS);
     }
 
     /**
@@ -559,9 +1038,39 @@ namespace IBApi
      */
     public void cancelRealTimeBars(int tickerId)
     {
+      if (useProtoBuf(serverVersion, OutgoingMessages.CancelRealTimeBars))
+      {
+        cancelRealTimeBarsProtoBuf(EClientUtils.createCancelRealTimeBarsProto(tickerId));
+        return;
+      }
+
       if (!CheckConnection()) return;
 
-      SendCancelRequest(OutgoingMessages.CancelRealTimeBars, 1, tickerId, EClientErrors.FAIL_SEND_CANRTBARS);
+      SendCancelRequest(OutgoingMessages.CancelRealTimeBars, 1, tickerId, EClientErrors.FAIL_SEND_CANRTBARS, serverVersion);
+    }
+
+    public void cancelRealTimeBarsProtoBuf(protobuf.CancelRealTimeBars cancelRealTimeBarsProto)
+    {
+      if (cancelRealTimeBarsProto == null) return;
+      if (!CheckConnection()) return;
+
+      var paramsList = new BinaryWriter(new MemoryStream());
+      var lengthPos = prepareBuffer(paramsList);
+
+      int reqId = cancelRealTimeBarsProto.HasReqId ? cancelRealTimeBarsProto.ReqId : IncomingMessage.NotValid;
+
+      try
+      {
+        paramsList.AddParameter(OutgoingMessages.CancelRealTimeBars, serverVersion);
+        paramsList.AddParameter(cancelRealTimeBarsProto.ToByteArray());
+      }
+      catch (EClientException e)
+      {
+        wrapper.error(reqId, Util.CurrentTimeMillis(), e.Err.Code, e.Err.Message + e.Text, "");
+        return;
+      }
+
+      CloseAndSend(reqId, paramsList, lengthPos, EClientErrors.FAIL_SEND_CANRTBARS);
     }
 
     /**
@@ -571,9 +1080,39 @@ namespace IBApi
      */
     public void cancelScannerSubscription(int tickerId)
     {
+      if (useProtoBuf(serverVersion, OutgoingMessages.CancelScannerSubscription))
+      {
+        cancelScannerSubscriptionProtoBuf(EClientUtils.createCancelScannerSubscriptionProto(tickerId));
+        return;
+      }
+
       if (!CheckConnection()) return;
 
-      SendCancelRequest(OutgoingMessages.CancelScannerSubscription, 1, tickerId, EClientErrors.FAIL_SEND_CANSCANNER);
+      SendCancelRequest(OutgoingMessages.CancelScannerSubscription, 1, tickerId, EClientErrors.FAIL_SEND_CANSCANNER, serverVersion);
+    }
+
+    public void cancelScannerSubscriptionProtoBuf(protobuf.CancelScannerSubscription cancelScannerSubscriptionProto)
+    {
+      if (cancelScannerSubscriptionProto == null) return;
+      if (!CheckConnection()) return;
+
+      var paramsList = new BinaryWriter(new MemoryStream());
+      var lengthPos = prepareBuffer(paramsList);
+
+      int reqId = cancelScannerSubscriptionProto.HasReqId ? cancelScannerSubscriptionProto.ReqId : IncomingMessage.NotValid;
+
+      try
+      {
+        paramsList.AddParameter(OutgoingMessages.CancelScannerSubscription, serverVersion);
+        paramsList.AddParameter(cancelScannerSubscriptionProto.ToByteArray());
+      }
+      catch (EClientException e)
+      {
+        wrapper.error(reqId, Util.CurrentTimeMillis(), e.Err.Code, e.Err.Message + e.Text, "");
+        return;
+      }
+
+      CloseAndSend(reqId, paramsList, lengthPos, EClientErrors.FAIL_SEND_CANSCANNER);
     }
 
     /**
@@ -591,6 +1130,12 @@ namespace IBApi
      */
     public void exerciseOptions(int tickerId, Contract contract, int exerciseAction, int exerciseQuantity, string account, int ovrd, string manualOrderTime, string customerAccount, bool professionalCustomer)
     {
+      if (useProtoBuf(serverVersion, OutgoingMessages.ExerciseOptions))
+      {
+        exerciseOptionsProtoBuf(EClientUtils.createExerciseOptionsRequestProto(tickerId, contract, exerciseAction, exerciseQuantity, account, ovrd != 0, manualOrderTime, customerAccount, professionalCustomer));
+        return;
+      }
+
       //WARN needs to be tested!
       if (!CheckConnection()) return;
       if (!CheckServerVersion(21, " It does not support options exercise from the API.")) return;
@@ -625,14 +1170,14 @@ namespace IBApi
 
       try
       {
-        paramsList.AddParameter(OutgoingMessages.ExerciseOptions);
+        paramsList.AddParameter(OutgoingMessages.ExerciseOptions, serverVersion);
         paramsList.AddParameter(VERSION);
         paramsList.AddParameter(tickerId);
         if (serverVersion >= MinServerVer.TRADING_CLASS) paramsList.AddParameter(contract.ConId);
         paramsList.AddParameter(contract.Symbol);
         paramsList.AddParameter(contract.SecType);
         paramsList.AddParameter(contract.LastTradeDateOrContractMonth);
-        paramsList.AddParameter(contract.Strike);
+        paramsList.AddParameterMax(contract.Strike);
         paramsList.AddParameter(contract.Right);
         paramsList.AddParameter(contract.Multiplier);
         paramsList.AddParameter(contract.Exchange);
@@ -649,11 +1194,35 @@ namespace IBApi
       }
       catch (EClientException e)
       {
-        wrapper.error(tickerId, e.Err.Code, e.Err.Message + e.Text, "");
+        wrapper.error(tickerId, Util.CurrentTimeMillis(), e.Err.Code, e.Err.Message + e.Text, "");
         return;
       }
 
       CloseAndSend(tickerId, paramsList, lengthPos, EClientErrors.FAIL_GENERIC);
+    }
+
+    public void exerciseOptionsProtoBuf(protobuf.ExerciseOptionsRequest exerciseOptionsRequestProto)
+    {
+      if (exerciseOptionsRequestProto == null) return;
+      if (!CheckConnection()) return;
+
+      var paramsList = new BinaryWriter(new MemoryStream());
+      var lengthPos = prepareBuffer(paramsList);
+
+      int orderId = exerciseOptionsRequestProto.HasOrderId ? exerciseOptionsRequestProto.OrderId : IncomingMessage.NotValid;
+
+      try
+      {
+        paramsList.AddParameter(OutgoingMessages.ExerciseOptions, serverVersion);
+        paramsList.AddParameter(exerciseOptionsRequestProto.ToByteArray());
+      }
+      catch (EClientException e)
+      {
+        wrapper.error(orderId, Util.CurrentTimeMillis(), e.Err.Code, e.Err.Message + e.Text, "");
+        return;
+      }
+
+      CloseAndSend(orderId, paramsList, lengthPos, EClientErrors.FAIL_GENERIC);
     }
 
     /**
@@ -665,6 +1234,12 @@ namespace IBApi
      */
     public void placeOrder(int id, Contract contract, Order order)
     {
+      if (useProtoBuf(serverVersion, OutgoingMessages.PlaceOrder))
+      {
+        placeOrderProtoBuf(EClientUtils.createPlaceOrderRequestProto(id, contract, order));
+        return;
+      }
+
       if (!CheckConnection()) return;
       if (!VerifyOrder(order, id, StringsAreEqual(Constants.BagSecType, contract.SecType))) return;
       if (!VerifyOrderContract(contract, id)) return;
@@ -675,14 +1250,14 @@ namespace IBApi
 
       try
       {
-        paramsList.AddParameter(OutgoingMessages.PlaceOrder);
+        paramsList.AddParameter(OutgoingMessages.PlaceOrder, serverVersion);
         if (serverVersion < MinServerVer.ORDER_CONTAINER) paramsList.AddParameter(MsgVersion);
         paramsList.AddParameter(id);
         if (serverVersion >= MinServerVer.PLACE_ORDER_CONID) paramsList.AddParameter(contract.ConId);
         paramsList.AddParameter(contract.Symbol);
         paramsList.AddParameter(contract.SecType);
         paramsList.AddParameter(contract.LastTradeDateOrContractMonth);
-        paramsList.AddParameter(contract.Strike);
+        paramsList.AddParameterMax(contract.Strike);
         paramsList.AddParameter(contract.Right);
         if (serverVersion >= 15) paramsList.AddParameter(contract.Multiplier);
         paramsList.AddParameter(contract.Exchange);
@@ -1079,14 +1654,48 @@ namespace IBApi
         }
         if (serverVersion >= MinServerVer.MIN_SERVER_VER_CUSTOMER_ACCOUNT) paramsList.AddParameter(order.CustomerAccount);
         if (serverVersion >= MinServerVer.MIN_SERVER_VER_PROFESSIONAL_CUSTOMER) paramsList.AddParameter(order.ProfessionalCustomer);
+
+        if (serverVersion >= MinServerVer.MIN_SERVER_VER_RFQ_FIELDS && serverVersion < MinServerVer.MIN_SERVER_VER_UNDO_RFQ_FIELDS)
+        {
+          paramsList.AddParameter("");
+          paramsList.AddParameter(int.MaxValue);
+        }
+
+        if (serverVersion >= MinServerVer.MIN_SERVER_VER_INCLUDE_OVERNIGHT) paramsList.AddParameter(order.IncludeOvernight);
+        if (serverVersion >= MinServerVer.MIN_SERVER_VER_CME_TAGGING_FIELDS) paramsList.AddParameter(order.ManualOrderIndicator);
+        if (serverVersion >= MinServerVer.MIN_SERVER_VER_IMBALANCE_ONLY) paramsList.AddParameter(order.ImbalanceOnly);
       }
       catch (EClientException e)
       {
-        wrapper.error(id, e.Err.Code, e.Err.Message + e.Text, "");
+        wrapper.error(id, Util.CurrentTimeMillis(), e.Err.Code, e.Err.Message + e.Text, "");
         return;
       }
 
       CloseAndSend(id, paramsList, lengthPos, EClientErrors.FAIL_SEND_ORDER);
+    }
+
+    public void placeOrderProtoBuf(protobuf.PlaceOrderRequest placeOrderRequestProto)
+    {
+      if (placeOrderRequestProto == null) return;
+      if (!CheckConnection()) return;
+
+      var paramsList = new BinaryWriter(new MemoryStream());
+      var lengthPos = prepareBuffer(paramsList);
+
+      int orderId = placeOrderRequestProto.HasOrderId ? placeOrderRequestProto.OrderId : int.MaxValue;
+
+      try
+      {
+        paramsList.AddParameter(OutgoingMessages.PlaceOrder, serverVersion);
+        paramsList.AddParameter(placeOrderRequestProto.ToByteArray());
+      }
+      catch (EClientException e)
+      {
+        wrapper.error(orderId, Util.CurrentTimeMillis(), e.Err.Code, e.Err.Message + e.Text, "");
+        return;
+      }
+
+      CloseAndSend(orderId, paramsList, lengthPos, EClientErrors.FAIL_SEND_ORDER);
     }
 
     /**
@@ -1101,10 +1710,16 @@ namespace IBApi
      */
     public void replaceFA(int reqId, int faDataType, string xml)
     {
+      if (useProtoBuf(serverVersion, OutgoingMessages.ReplaceFA))
+      {
+        replaceFAProtoBuf(EClientUtils.createFAReplaceProto(reqId, faDataType, xml));
+        return;
+      }
+
       if (!CheckConnection()) return;
       if (serverVersion >= MinServerVer.MIN_SERVER_VER_FA_PROFILE_DESUPPORT && faDataType == 2)
       {
-        wrapper.error(reqId, EClientErrors.FA_PROFILE_NOT_SUPPORTED.Code, EClientErrors.FA_PROFILE_NOT_SUPPORTED.Message, "");
+        wrapper.error(reqId, Util.CurrentTimeMillis(), EClientErrors.FA_PROFILE_NOT_SUPPORTED.Code, EClientErrors.FA_PROFILE_NOT_SUPPORTED.Message, "");
         return;
       }
 
@@ -1113,7 +1728,7 @@ namespace IBApi
 
       try
       {
-        paramsList.AddParameter(OutgoingMessages.ReplaceFA);
+        paramsList.AddParameter(OutgoingMessages.ReplaceFA, serverVersion);
         paramsList.AddParameter(1);
         paramsList.AddParameter(faDataType);
         paramsList.AddParameter(xml);
@@ -1124,10 +1739,33 @@ namespace IBApi
       }
       catch (EClientException e)
       {
-        wrapper.error(reqId, e.Err.Code, e.Err.Message + e.Text, "");
+        wrapper.error(reqId, Util.CurrentTimeMillis(), e.Err.Code, e.Err.Message + e.Text, "");
         return;
       }
 
+      CloseAndSend(reqId, paramsList, lengthPos, EClientErrors.FAIL_SEND_FA_REPLACE);
+    }
+
+    public void replaceFAProtoBuf(protobuf.FAReplace faReplaceProto)
+    {
+      if (faReplaceProto == null) return;
+      if (!CheckConnection()) return;
+
+      var paramsList = new BinaryWriter(new MemoryStream());
+      var lengthPos = prepareBuffer(paramsList);
+
+      int reqId = faReplaceProto.HasReqId ? faReplaceProto.ReqId : IncomingMessage.NotValid;
+
+      try
+      {
+        paramsList.AddParameter(OutgoingMessages.ReplaceFA, serverVersion);
+        paramsList.AddParameter(faReplaceProto.ToByteArray());
+      }
+      catch (EClientException e)
+      {
+        wrapper.error(reqId, Util.CurrentTimeMillis(), e.Err.Code, e.Err.Message + e.Text, "");
+        return;
+      }
       CloseAndSend(reqId, paramsList, lengthPos, EClientErrors.FAIL_SEND_FA_REPLACE);
     }
 
@@ -1142,10 +1780,16 @@ namespace IBApi
      */
     public void requestFA(int faDataType)
     {
+      if (useProtoBuf(serverVersion, OutgoingMessages.RequestFA))
+      {
+        reqFAProtoBuf(EClientUtils.createFARequestProto(faDataType));
+        return;
+      }
+
       if (!CheckConnection()) return;
       if (serverVersion >= MinServerVer.MIN_SERVER_VER_FA_PROFILE_DESUPPORT && faDataType == 2)
       {
-        wrapper.error(IncomingMessage.NotValid, EClientErrors.FA_PROFILE_NOT_SUPPORTED.Code, EClientErrors.FA_PROFILE_NOT_SUPPORTED.Message, "");
+        wrapper.error(IncomingMessage.NotValid, Util.CurrentTimeMillis(), EClientErrors.FA_PROFILE_NOT_SUPPORTED.Code, EClientErrors.FA_PROFILE_NOT_SUPPORTED.Message, "");
         return;
       }
 
@@ -1153,9 +1797,22 @@ namespace IBApi
       var paramsList = new BinaryWriter(new MemoryStream());
       var lengthPos = prepareBuffer(paramsList);
 
-      paramsList.AddParameter(OutgoingMessages.RequestFA);
+      paramsList.AddParameter(OutgoingMessages.RequestFA, serverVersion);
       paramsList.AddParameter(VERSION);
       paramsList.AddParameter(faDataType);
+      CloseAndSend(paramsList, lengthPos, EClientErrors.FAIL_SEND_FA_REQUEST);
+    }
+
+    public void reqFAProtoBuf(protobuf.FARequest faRequestProto)
+    {
+      if (faRequestProto == null) return;
+      if (!CheckConnection()) return;
+
+      var paramsList = new BinaryWriter(new MemoryStream());
+      var lengthPos = prepareBuffer(paramsList);
+
+      paramsList.AddParameter(OutgoingMessages.RequestFA, serverVersion);
+      paramsList.AddParameter(faRequestProto.ToByteArray());
       CloseAndSend(paramsList, lengthPos, EClientErrors.FAIL_SEND_FA_REQUEST);
     }
 
@@ -1202,6 +1859,12 @@ namespace IBApi
      */
     public void reqAccountSummary(int reqId, string group, string tags)
     {
+      if (useProtoBuf(serverVersion, OutgoingMessages.RequestAccountSummary))
+      {
+        reqAccountSummaryProtoBuf(EClientUtils.createAccountSummaryRequestProto(reqId, group, tags));
+        return;
+      }
+
       var VERSION = 1;
       if (!CheckConnection()) return;
       if (!CheckServerVersion(reqId, MinServerVer.ACCT_SUMMARY, " It does not support account summary requests.")) return;
@@ -1211,7 +1874,7 @@ namespace IBApi
 
       try
       {
-        paramsList.AddParameter(OutgoingMessages.RequestAccountSummary);
+        paramsList.AddParameter(OutgoingMessages.RequestAccountSummary, serverVersion);
         paramsList.AddParameter(VERSION);
         paramsList.AddParameter(reqId);
         paramsList.AddParameter(group);
@@ -1219,7 +1882,31 @@ namespace IBApi
       }
       catch (EClientException e)
       {
-        wrapper.error(reqId, e.Err.Code, e.Err.Message + e.Text, "");
+        wrapper.error(reqId, Util.CurrentTimeMillis(), e.Err.Code, e.Err.Message + e.Text, "");
+        return;
+      }
+
+      CloseAndSend(reqId, paramsList, lengthPos, EClientErrors.FAIL_SEND_REQACCOUNTDATA);
+    }
+
+    public void reqAccountSummaryProtoBuf(protobuf.AccountSummaryRequest accountSummaryRequestProto)
+    {
+      if (accountSummaryRequestProto == null) return;
+      if (!CheckConnection()) return;
+
+      var paramsList = new BinaryWriter(new MemoryStream());
+      var lengthPos = prepareBuffer(paramsList);
+
+      int reqId = accountSummaryRequestProto.HasReqId ? accountSummaryRequestProto.ReqId : IncomingMessage.NotValid;
+
+      try
+      {
+        paramsList.AddParameter(OutgoingMessages.RequestAccountSummary, serverVersion);
+        paramsList.AddParameter(accountSummaryRequestProto.ToByteArray());
+      }
+      catch (EClientException e)
+      {
+        wrapper.error(reqId, Util.CurrentTimeMillis(), e.Err.Code, e.Err.Message + e.Text, "");
         return;
       }
 
@@ -1236,6 +1923,12 @@ namespace IBApi
      */
     public void reqAccountUpdates(bool subscribe, string acctCode)
     {
+      if (useProtoBuf(serverVersion, OutgoingMessages.RequestAccountData))
+      {
+        reqAccountUpdatesProtoBuf(EClientUtils.createAccountDataRequestProto(subscribe, acctCode));
+        return;
+      }
+
       var VERSION = 2;
       if (!CheckConnection()) return;
       var paramsList = new BinaryWriter(new MemoryStream());
@@ -1243,18 +1936,40 @@ namespace IBApi
 
       try
       {
-        paramsList.AddParameter(OutgoingMessages.RequestAccountData);
+        paramsList.AddParameter(OutgoingMessages.RequestAccountData, serverVersion);
         paramsList.AddParameter(VERSION);
         paramsList.AddParameter(subscribe);
         if (serverVersion >= 9) paramsList.AddParameter(acctCode);
       }
       catch (EClientException e)
       {
-        wrapper.error(IncomingMessage.NotValid, e.Err.Code, e.Err.Message + e.Text, "");
+        wrapper.error(IncomingMessage.NotValid, Util.CurrentTimeMillis(), e.Err.Code, e.Err.Message + e.Text, "");
         return;
       }
 
-      CloseAndSend(paramsList, lengthPos, EClientErrors.FAIL_SEND_REQACCOUNTDATA);
+      CloseAndSend(paramsList, lengthPos, EClientErrors.FAIL_SEND_ACCT);
+    }
+
+    public void reqAccountUpdatesProtoBuf(protobuf.AccountDataRequest accountDataRequestProto)
+    {
+      if (accountDataRequestProto == null) return;
+      if (!CheckConnection()) return;
+
+      var paramsList = new BinaryWriter(new MemoryStream());
+      var lengthPos = prepareBuffer(paramsList);
+
+      try
+      {
+        paramsList.AddParameter(OutgoingMessages.RequestAccountData, serverVersion);
+        paramsList.AddParameter(accountDataRequestProto.ToByteArray());
+      }
+      catch (EClientException e)
+      {
+        wrapper.error(IncomingMessage.NotValid, Util.CurrentTimeMillis(), e.Err.Code, e.Err.Message + e.Text, "");
+        return;
+      }
+
+      CloseAndSend(paramsList, lengthPos, EClientErrors.FAIL_SEND_ACCT);
     }
 
     /**
@@ -1264,13 +1979,33 @@ namespace IBApi
      */
     public void reqAllOpenOrders()
     {
+      if (useProtoBuf(serverVersion, OutgoingMessages.RequestAllOpenOrders))
+      {
+        reqAllOpenOrdersProtoBuf(EClientUtils.createAllOpenOrdersRequestProto());
+        return;
+      }
+
       var VERSION = 1;
       if (!CheckConnection()) return;
       var paramsList = new BinaryWriter(new MemoryStream());
       var lengthPos = prepareBuffer(paramsList);
 
-      paramsList.AddParameter(OutgoingMessages.RequestAllOpenOrders);
+      paramsList.AddParameter(OutgoingMessages.RequestAllOpenOrders, serverVersion);
       paramsList.AddParameter(VERSION);
+      CloseAndSend(paramsList, lengthPos, EClientErrors.FAIL_SEND_OORDER);
+    }
+
+    public void reqAllOpenOrdersProtoBuf(protobuf.AllOpenOrdersRequest allOpenOrdersRequestProto)
+    {
+      if (allOpenOrdersRequestProto == null) return;
+      if (!CheckConnection()) return;
+
+      var paramsList = new BinaryWriter(new MemoryStream());
+      var lengthPos = prepareBuffer(paramsList);
+
+      paramsList.AddParameter(OutgoingMessages.RequestAllOpenOrders, serverVersion);
+      paramsList.AddParameter(allOpenOrdersRequestProto.ToByteArray());
+
       CloseAndSend(paramsList, lengthPos, EClientErrors.FAIL_SEND_OORDER);
     }
 
@@ -1281,14 +2016,34 @@ namespace IBApi
      */
     public void reqAutoOpenOrders(bool autoBind)
     {
+      if (useProtoBuf(serverVersion, OutgoingMessages.RequestAutoOpenOrders))
+      {
+        reqAutoOpenOrdersProtoBuf(EClientUtils.createAutoOpenOrdersRequestProto(autoBind));
+        return;
+      }
+
       var VERSION = 1;
       if (!CheckConnection()) return;
       var paramsList = new BinaryWriter(new MemoryStream());
       var lengthPos = prepareBuffer(paramsList);
 
-      paramsList.AddParameter(OutgoingMessages.RequestAutoOpenOrders);
+      paramsList.AddParameter(OutgoingMessages.RequestAutoOpenOrders, serverVersion);
       paramsList.AddParameter(VERSION);
       paramsList.AddParameter(autoBind);
+      CloseAndSend(paramsList, lengthPos, EClientErrors.FAIL_SEND_OORDER);
+    }
+
+    public void reqAutoOpenOrdersProtoBuf(protobuf.AutoOpenOrdersRequest autoOpenOrdersRequestProto)
+    {
+      if (autoOpenOrdersRequestProto == null) return;
+      if (!CheckConnection()) return;
+
+      var paramsList = new BinaryWriter(new MemoryStream());
+      var lengthPos = prepareBuffer(paramsList);
+
+      paramsList.AddParameter(OutgoingMessages.RequestAutoOpenOrders, serverVersion);
+      paramsList.AddParameter(autoOpenOrdersRequestProto.ToByteArray());
+
       CloseAndSend(paramsList, lengthPos, EClientErrors.FAIL_SEND_OORDER);
     }
 
@@ -1301,6 +2056,12 @@ namespace IBApi
      */
     public void reqContractDetails(int reqId, Contract contract)
     {
+      if (useProtoBuf(serverVersion, OutgoingMessages.RequestContractData))
+      {
+        reqContractDataProtoBuf(EClientUtils.createContractDataRequestProto(reqId, contract));
+        return;
+      }
+
       if (!CheckConnection()) return;
 
       if ((!IsEmpty(contract.SecIdType) || !IsEmpty(contract.SecId)) && !CheckServerVersion(reqId, MinServerVer.SEC_ID_TYPE, " It does not support secIdType not secId attributes")) return;
@@ -1315,14 +2076,14 @@ namespace IBApi
 
       try
       {
-        paramsList.AddParameter(OutgoingMessages.RequestContractData);
+        paramsList.AddParameter(OutgoingMessages.RequestContractData, serverVersion);
         paramsList.AddParameter(VERSION); //version
         if (serverVersion >= MinServerVer.CONTRACT_DATA_CHAIN) paramsList.AddParameter(reqId);
         if (serverVersion >= MinServerVer.CONTRACT_CONID) paramsList.AddParameter(contract.ConId);
         paramsList.AddParameter(contract.Symbol);
         paramsList.AddParameter(contract.SecType);
         paramsList.AddParameter(contract.LastTradeDateOrContractMonth);
-        paramsList.AddParameter(contract.Strike);
+        paramsList.AddParameterMax(contract.Strike);
         paramsList.AddParameter(contract.Right);
         if (serverVersion >= 15) paramsList.AddParameter(contract.Multiplier);
         if (serverVersion >= MinServerVer.PRIMARYEXCH)
@@ -1355,7 +2116,31 @@ namespace IBApi
       }
       catch (EClientException e)
       {
-        wrapper.error(reqId, e.Err.Code, e.Err.Message + e.Text, "");
+        wrapper.error(reqId, Util.CurrentTimeMillis(), e.Err.Code, e.Err.Message + e.Text, "");
+        return;
+      }
+
+      CloseAndSend(reqId, paramsList, lengthPos, EClientErrors.FAIL_SEND_REQCONTRACT);
+    }
+
+    public void reqContractDataProtoBuf(protobuf.ContractDataRequest contractDataRequestProto)
+    {
+      if (contractDataRequestProto == null) return;
+      if (!CheckConnection()) return;
+
+      var paramsList = new BinaryWriter(new MemoryStream());
+      var lengthPos = prepareBuffer(paramsList);
+
+      int reqId = contractDataRequestProto.HasReqId ? contractDataRequestProto.ReqId : IncomingMessage.NotValid;
+
+      try
+      {
+        paramsList.AddParameter(OutgoingMessages.RequestContractData, serverVersion);
+        paramsList.AddParameter(contractDataRequestProto.ToByteArray());
+      }
+      catch (EClientException e)
+      {
+        wrapper.error(reqId, Util.CurrentTimeMillis(), e.Err.Code, e.Err.Message + e.Text, "");
         return;
       }
 
@@ -1368,6 +2153,12 @@ namespace IBApi
      */
     public void reqCurrentTime()
     {
+      if (useProtoBuf(serverVersion, OutgoingMessages.RequestCurrentTime))
+      {
+        reqCurrentTimeProtoBuf(EClientUtils.createCurrentTimeRequestProto());
+        return;
+      }
+
       var VERSION = 1;
       if (!CheckConnection()) return;
       if (!CheckServerVersion(MinServerVer.CURRENT_TIME, " It does not support current time requests.")) return;
@@ -1375,21 +2166,52 @@ namespace IBApi
       var paramsList = new BinaryWriter(new MemoryStream());
       var lengthPos = prepareBuffer(paramsList);
 
-      paramsList.AddParameter(OutgoingMessages.RequestCurrentTime);
+      paramsList.AddParameter(OutgoingMessages.RequestCurrentTime, serverVersion);
       paramsList.AddParameter(VERSION); //version
+      CloseAndSend(paramsList, lengthPos, EClientErrors.FAIL_SEND_REQCURRTIME);
+    }
+
+    public void reqCurrentTimeProtoBuf(protobuf.CurrentTimeRequest currentTimeRequestProto)
+    {
+      if (currentTimeRequestProto == null) return;
+      if (!CheckConnection()) return;
+
+      var paramsList = new BinaryWriter(new MemoryStream());
+      var lengthPos = prepareBuffer(paramsList);
+
+      try
+      {
+        paramsList.AddParameter(OutgoingMessages.RequestCurrentTime, serverVersion);
+        paramsList.AddParameter(currentTimeRequestProto.ToByteArray());
+      }
+      catch (EClientException e)
+      {
+        wrapper.error(IncomingMessage.NotValid, Util.CurrentTimeMillis(), e.Err.Code, e.Err.Message + e.Text, "");
+        return;
+      }
+
       CloseAndSend(paramsList, lengthPos, EClientErrors.FAIL_SEND_REQCURRTIME);
     }
 
     /**
      * @brief Requests current day's (since midnight) executions matching the filter.
-     * Only the current day's executions can be retrieved. Along with the executions, the CommissionReport will also be returned. The execution details will arrive at EWrapper:execDetails
+     * Only the current day's executions can be retrieved. Along with the executions, the CommissionAndFeesReport will also be returned. The execution details will arrive at EWrapper:execDetails
      * @param reqId the request's unique identifier.
      * @param filter the filter criteria used to determine which execution reports are returned.
-     * @sa EWrapper::execDetails, EWrapper::commissionReport, ExecutionFilter
+     * @sa EWrapper::execDetails, EWrapper::commissionAndFeesReport, ExecutionFilter
      */
     public void reqExecutions(int reqId, ExecutionFilter filter)
     {
+      if (useProtoBuf(serverVersion, OutgoingMessages.RequestExecutions))
+      {
+        reqExecutionsProtoBuf(EClientUtils.createExecutionRequestProto(reqId, filter));
+        return;
+      }
+
       if (!CheckConnection()) return;
+      if ((filter.SpecificDates != null && filter.SpecificDates.Any() || filter.LastNDays != int.MaxValue) &&
+              !CheckServerVersion(reqId, MinServerVer.MIN_SERVER_VER_PARAMETRIZED_DAYS_OF_EXECUTIONS, " It does not support last N days and specific dates parameters"))
+        return;
 
       var VERSION = 3;
 
@@ -1398,7 +2220,7 @@ namespace IBApi
 
       try
       {
-        paramsList.AddParameter(OutgoingMessages.RequestExecutions);
+        paramsList.AddParameter(OutgoingMessages.RequestExecutions, serverVersion);
         paramsList.AddParameter(VERSION); //version
         if (serverVersion >= MinServerVer.EXECUTION_DATA_CHAIN) paramsList.AddParameter(reqId);
 
@@ -1414,11 +2236,45 @@ namespace IBApi
           paramsList.AddParameter(filter.SecType);
           paramsList.AddParameter(filter.Exchange);
           paramsList.AddParameter(filter.Side);
+
+          if (serverVersion >= MinServerVer.MIN_SERVER_VER_PARAMETRIZED_DAYS_OF_EXECUTIONS)
+          {
+            paramsList.AddParameter(filter.LastNDays);
+            paramsList.AddParameter(filter.SpecificDates.Count);
+            foreach (int specificDate in filter.SpecificDates)
+            {
+              paramsList.AddParameter(specificDate);
+            }
+          }
         }
       }
       catch (EClientException e)
       {
-        wrapper.error(reqId, e.Err.Code, e.Err.Message + e.Text, "");
+        wrapper.error(reqId, Util.CurrentTimeMillis(), e.Err.Code, e.Err.Message + e.Text, "");
+        return;
+      }
+
+      CloseAndSend(reqId, paramsList, lengthPos, EClientErrors.FAIL_SEND_EXEC);
+    }
+
+    public void reqExecutionsProtoBuf(protobuf.ExecutionRequest executionRequestProto)
+    {
+      if (executionRequestProto == null) return;
+      if (!CheckConnection()) return;
+
+      var paramsList = new BinaryWriter(new MemoryStream());
+      var lengthPos = prepareBuffer(paramsList);
+
+      int reqId = executionRequestProto.HasReqId ? executionRequestProto.ReqId : IncomingMessage.NotValid;
+
+      try
+      {
+        paramsList.AddParameter(OutgoingMessages.RequestExecutions, serverVersion);
+        paramsList.AddParameter(executionRequestProto.ToByteArray());
+      }
+      catch (EClientException e)
+      {
+        wrapper.error(reqId, Util.CurrentTimeMillis(), e.Err.Code, e.Err.Message + e.Text, "");
         return;
       }
 
@@ -1442,6 +2298,12 @@ namespace IBApi
         //reserved for future use, must be blank
         List<TagValue> fundamentalDataOptions)
     {
+      if (useProtoBuf(serverVersion, OutgoingMessages.RequestFundamentalData))
+      {
+        reqFundamentalsDataProtoBuf(EClientUtils.createFundamentalsDataRequestProto(reqId, contract, reportType, fundamentalDataOptions));
+        return;
+      }
+
       if (!CheckConnection()) return;
       if (!CheckServerVersion(reqId, MinServerVer.FUNDAMENTAL_DATA, " It does not support Fundamental Data requests.")) return;
       if ((!IsEmpty(contract.TradingClass) || contract.ConId > 0 || !IsEmpty(contract.Multiplier)) && !CheckServerVersion(reqId, MinServerVer.TRADING_CLASS, "")) return;
@@ -1452,7 +2314,7 @@ namespace IBApi
 
       try
       {
-        paramsList.AddParameter(OutgoingMessages.RequestFundamentalData);
+        paramsList.AddParameter(OutgoingMessages.RequestFundamentalData, serverVersion);
         paramsList.AddParameter(VERSION);
         paramsList.AddParameter(reqId);
 
@@ -1473,7 +2335,31 @@ namespace IBApi
       }
       catch (EClientException e)
       {
-        wrapper.error(reqId, e.Err.Code, e.Err.Message + e.Text, "");
+        wrapper.error(reqId, Util.CurrentTimeMillis(), e.Err.Code, e.Err.Message + e.Text, "");
+        return;
+      }
+
+      CloseAndSend(reqId, paramsList, lengthPos, EClientErrors.FAIL_SEND_REQFUNDDATA);
+    }
+
+    public void reqFundamentalsDataProtoBuf(protobuf.FundamentalsDataRequest fundamentalsDataRequestProto)
+    {
+      if (fundamentalsDataRequestProto == null) return;
+      if (!CheckConnection()) return;
+
+      var paramsList = new BinaryWriter(new MemoryStream());
+      var lengthPos = prepareBuffer(paramsList);
+
+      int reqId = fundamentalsDataRequestProto.HasReqId ? fundamentalsDataRequestProto.ReqId : IncomingMessage.NotValid;
+
+      try
+      {
+        paramsList.AddParameter(OutgoingMessages.RequestFundamentalData, serverVersion);
+        paramsList.AddParameter(fundamentalsDataRequestProto.ToByteArray());
+      }
+      catch (EClientException e)
+      {
+        wrapper.error(reqId, Util.CurrentTimeMillis(), e.Err.Code, e.Err.Message + e.Text, "");
         return;
       }
 
@@ -1485,18 +2371,61 @@ namespace IBApi
      * This method will cancel ALL open orders including those placed directly from TWS.
      * @sa cancelOrder
      */
-    public void reqGlobalCancel()
+    public void reqGlobalCancel(OrderCancel orderCancel)
     {
+      if (useProtoBuf(serverVersion, OutgoingMessages.RequestGlobalCancel))
+      {
+        reqGlobalCancelProtoBuf(EClientUtils.createGlobalCancelRequestProto(orderCancel));
+        return;
+      }
+
       if (!CheckConnection()) return;
       if (!CheckServerVersion(MinServerVer.REQ_GLOBAL_CANCEL, "It does not support global cancel requests.")) return;
+
+      if ((!IsEmpty(orderCancel.ExtOperator) || orderCancel.ManualOrderIndicator != int.MaxValue) &&
+          !CheckServerVersion(MinServerVer.MIN_SERVER_VER_CME_TAGGING_FIELDS, " It does not support ext operator and manual order indicator parameters")) return;
 
       const int VERSION = 1;
 
       var paramsList = new BinaryWriter(new MemoryStream());
       var lengthPos = prepareBuffer(paramsList);
 
-      paramsList.AddParameter(OutgoingMessages.RequestGlobalCancel);
-      paramsList.AddParameter(VERSION);
+      paramsList.AddParameter(OutgoingMessages.RequestGlobalCancel, serverVersion);
+      if (serverVersion < MinServerVer.MIN_SERVER_VER_CME_TAGGING_FIELDS)
+      {
+        paramsList.AddParameter(VERSION);
+      }
+      if (serverVersion >= MinServerVer.MIN_SERVER_VER_CME_TAGGING_FIELDS)
+      {
+        paramsList.AddParameter(orderCancel.ExtOperator);
+        paramsList.AddParameter(orderCancel.ManualOrderIndicator);
+      }
+      CloseAndSend(paramsList, lengthPos, EClientErrors.FAIL_SEND_REQGLOBALCANCEL);
+    }
+
+    public void reqGlobalCancelProtoBuf(protobuf.GlobalCancelRequest globalCancelRequestProto)
+    {
+      if (globalCancelRequestProto == null)
+      {
+        return;
+      }
+
+      if (!CheckConnection()) return;
+
+      var paramsList = new BinaryWriter(new MemoryStream());
+      var lengthPos = prepareBuffer(paramsList);
+
+      try
+      {
+        paramsList.AddParameter(OutgoingMessages.RequestGlobalCancel, serverVersion);
+        paramsList.AddParameter(globalCancelRequestProto.ToByteArray());
+      }
+      catch (EClientException e)
+      {
+        wrapper.error(IncomingMessage.NotValid, Util.CurrentTimeMillis(), e.Err.Code, e.Err.Message + e.Text, "");
+        return;
+      }
+
       CloseAndSend(paramsList, lengthPos, EClientErrors.FAIL_SEND_REQGLOBALCANCEL);
     }
 
@@ -1546,6 +2475,12 @@ namespace IBApi
     public void reqHistoricalData(int tickerId, Contract contract, string endDateTime,
         string durationStr, string barSizeSetting, string whatToShow, int useRTH, int formatDate, bool keepUpToDate, List<TagValue> chartOptions)
     {
+      if (useProtoBuf(serverVersion, OutgoingMessages.RequestHistoricalData))
+      {
+        reqHistoricalDataProtoBuf(EClientUtils.createHistoricalDataRequestProto(tickerId, contract, endDateTime, durationStr, barSizeSetting, whatToShow, useRTH != 0, formatDate, keepUpToDate, chartOptions));
+        return;
+      }
+
       if (!CheckConnection()) return;
       if (!CheckServerVersion(tickerId, 16)) return;
       if ((!IsEmpty(contract.TradingClass) || contract.ConId > 0) && !CheckServerVersion(tickerId, MinServerVer.TRADING_CLASS, " It does not support conId nor trading class parameters when requesting historical data.")) return;
@@ -1557,14 +2492,14 @@ namespace IBApi
 
       try
       {
-        paramsList.AddParameter(OutgoingMessages.RequestHistoricalData);
+        paramsList.AddParameter(OutgoingMessages.RequestHistoricalData, serverVersion);
         if (serverVersion < MinServerVer.SYNT_REALTIME_BARS) paramsList.AddParameter(VERSION);
         paramsList.AddParameter(tickerId);
         if (serverVersion >= MinServerVer.TRADING_CLASS) paramsList.AddParameter(contract.ConId);
         paramsList.AddParameter(contract.Symbol);
         paramsList.AddParameter(contract.SecType);
         paramsList.AddParameter(contract.LastTradeDateOrContractMonth);
-        paramsList.AddParameter(contract.Strike);
+        paramsList.AddParameterMax(contract.Strike);
         paramsList.AddParameter(contract.Right);
         paramsList.AddParameter(contract.Multiplier);
         paramsList.AddParameter(contract.Exchange);
@@ -1607,11 +2542,35 @@ namespace IBApi
       }
       catch (EClientException e)
       {
-        wrapper.error(tickerId, e.Err.Code, e.Err.Message + e.Text, "");
+        wrapper.error(tickerId, Util.CurrentTimeMillis(), e.Err.Code, e.Err.Message + e.Text, "");
         return;
       }
 
       CloseAndSend(tickerId, paramsList, lengthPos, EClientErrors.FAIL_SEND_REQHISTDATA);
+    }
+
+    public void reqHistoricalDataProtoBuf(protobuf.HistoricalDataRequest historicalDataRequestProto)
+    {
+      if (historicalDataRequestProto == null) return;
+      if (!CheckConnection()) return;
+
+      var paramsList = new BinaryWriter(new MemoryStream());
+      var lengthPos = prepareBuffer(paramsList);
+
+      int reqId = historicalDataRequestProto.HasReqId ? historicalDataRequestProto.ReqId : IncomingMessage.NotValid;
+
+      try
+      {
+        paramsList.AddParameter(OutgoingMessages.RequestHistoricalData, serverVersion);
+        paramsList.AddParameter(historicalDataRequestProto.ToByteArray());
+      }
+      catch (EClientException e)
+      {
+        wrapper.error(reqId, Util.CurrentTimeMillis(), e.Err.Code, e.Err.Message + e.Text, "");
+        return;
+      }
+
+      CloseAndSend(reqId, paramsList, lengthPos, EClientErrors.FAIL_SEND_REQHISTDATA);
     }
 
     /**
@@ -1621,15 +2580,43 @@ namespace IBApi
      */
     public void reqIds(int numIds)
     {
+      if (useProtoBuf(serverVersion, OutgoingMessages.RequestIds))
+      {
+        reqIdsProtoBuf(EClientUtils.createIdsRequestProto(numIds));
+        return;
+      }
+
       if (!CheckConnection()) return;
       const int VERSION = 1;
 
       var paramsList = new BinaryWriter(new MemoryStream());
       var lengthPos = prepareBuffer(paramsList);
 
-      paramsList.AddParameter(OutgoingMessages.RequestIds);
+      paramsList.AddParameter(OutgoingMessages.RequestIds, serverVersion);
       paramsList.AddParameter(VERSION);
       paramsList.AddParameter(numIds);
+      CloseAndSend(paramsList, lengthPos, EClientErrors.FAIL_GENERIC);
+    }
+
+    public void reqIdsProtoBuf(protobuf.IdsRequest idsRequestProto)
+    {
+      if (idsRequestProto == null) return;
+      if (!CheckConnection()) return;
+
+      var paramsList = new BinaryWriter(new MemoryStream());
+      var lengthPos = prepareBuffer(paramsList);
+
+      try
+      {
+        paramsList.AddParameter(OutgoingMessages.RequestIds, serverVersion);
+        paramsList.AddParameter(idsRequestProto.ToByteArray());
+      }
+      catch (EClientException e)
+      {
+        wrapper.error(IncomingMessage.NotValid, Util.CurrentTimeMillis(), e.Err.Code, e.Err.Message + e.Text, "");
+        return;
+      }
+
       CloseAndSend(paramsList, lengthPos, EClientErrors.FAIL_GENERIC);
     }
 
@@ -1639,14 +2626,42 @@ namespace IBApi
      */
     public void reqManagedAccts()
     {
+      if (useProtoBuf(serverVersion, OutgoingMessages.RequestManagedAccounts))
+      {
+        reqManagedAcctsProtoBuf(EClientUtils.createManagedAccountsRequestProto());
+        return;
+      }
+
       if (!CheckConnection()) return;
       const int VERSION = 1;
       var paramsList = new BinaryWriter(new MemoryStream());
       var lengthPos = prepareBuffer(paramsList);
 
-      paramsList.AddParameter(OutgoingMessages.RequestManagedAccounts);
+      paramsList.AddParameter(OutgoingMessages.RequestManagedAccounts, serverVersion);
       paramsList.AddParameter(VERSION);
       CloseAndSend(paramsList, lengthPos, EClientErrors.FAIL_GENERIC);
+    }
+
+    public void reqManagedAcctsProtoBuf(protobuf.ManagedAccountsRequest managedAccountsRequestProto)
+    {
+      if (managedAccountsRequestProto == null) return;
+      if (!CheckConnection()) return;
+
+      var paramsList = new BinaryWriter(new MemoryStream());
+      var lengthPos = prepareBuffer(paramsList);
+
+      try
+      {
+        paramsList.AddParameter(OutgoingMessages.RequestManagedAccounts, serverVersion);
+        paramsList.AddParameter(managedAccountsRequestProto.ToByteArray());
+      }
+      catch (EClientException e)
+      {
+        wrapper.error(IncomingMessage.NotValid, Util.CurrentTimeMillis(), e.Err.Code, e.Err.Message + e.Text, "");
+        return;
+      }
+
+      CloseAndSend(paramsList, lengthPos, EClientErrors.FAIL_SEND_OORDER);
     }
 
     /**
@@ -1674,8 +2689,14 @@ namespace IBApi
      * @param regulatory snapshot for US stocks requests NBBO snapshots for users which have "US Securities Snapshot Bundle" subscription but not corresponding Network A, B, or C subscription necessary for streaming market data. One-time snapshot of current market price that will incur a fee of 1 cent to the account per snapshot.
      * @sa cancelMktData, EWrapper::tickPrice, EWrapper::tickSize, EWrapper::tickString, EWrapper::tickEFP, EWrapper::tickGeneric, EWrapper::tickOptionComputation, EWrapper::tickSnapshotEnd
      */
-    public void reqMktData(int tickerId, Contract contract, string genericTickList, bool snapshot, bool regulatorySnaphsot, List<TagValue> mktDataOptions)
+    public void reqMktData(int tickerId, Contract contract, string genericTickList, bool snapshot, bool regulatorySnapshot, List<TagValue> mktDataOptions)
     {
+      if (useProtoBuf(serverVersion, OutgoingMessages.RequestMarketData))
+      {
+        reqMarketDataProtoBuf(EClientUtils.createMarketDataRequestProto(tickerId, contract, genericTickList, snapshot, regulatorySnapshot, mktDataOptions));
+        return;
+      }
+
       if (!CheckConnection()) return;
       if (snapshot && !CheckServerVersion(tickerId, MinServerVer.SNAPSHOT_MKT_DATA, "It does not support snapshot market data requests.")) return;
       if (contract.DeltaNeutralContract != null && !CheckServerVersion(tickerId, MinServerVer.DELTA_NEUTRAL, " It does not support delta-neutral orders")) return;
@@ -1688,14 +2709,14 @@ namespace IBApi
 
       try
       {
-        paramsList.AddParameter(OutgoingMessages.RequestMarketData);
+        paramsList.AddParameter(OutgoingMessages.RequestMarketData, serverVersion);
         paramsList.AddParameter(version);
         paramsList.AddParameter(tickerId);
         if (serverVersion >= MinServerVer.CONTRACT_CONID) paramsList.AddParameter(contract.ConId);
         paramsList.AddParameter(contract.Symbol);
         paramsList.AddParameter(contract.SecType);
         paramsList.AddParameter(contract.LastTradeDateOrContractMonth);
-        paramsList.AddParameter(contract.Strike);
+        paramsList.AddParameterMax(contract.Strike);
         paramsList.AddParameter(contract.Right);
         if (serverVersion >= 15) paramsList.AddParameter(contract.Multiplier);
         paramsList.AddParameter(contract.Exchange);
@@ -1739,16 +2760,40 @@ namespace IBApi
         }
         if (serverVersion >= 31) paramsList.AddParameter(genericTickList);
         if (serverVersion >= MinServerVer.SNAPSHOT_MKT_DATA) paramsList.AddParameter(snapshot);
-        if (serverVersion >= MinServerVer.SMART_COMPONENTS) paramsList.AddParameter(regulatorySnaphsot);
+        if (serverVersion >= MinServerVer.SMART_COMPONENTS) paramsList.AddParameter(regulatorySnapshot);
         if (serverVersion >= MinServerVer.LINKING) paramsList.AddParameter(mktDataOptions);
       }
       catch (EClientException e)
       {
-        wrapper.error(tickerId, e.Err.Code, e.Err.Message + e.Text, "");
+        wrapper.error(tickerId, Util.CurrentTimeMillis(), e.Err.Code, e.Err.Message + e.Text, "");
         return;
       }
 
       CloseAndSend(tickerId, paramsList, lengthPos, EClientErrors.FAIL_SEND_REQMKT);
+    }
+
+    public void reqMarketDataProtoBuf(protobuf.MarketDataRequest marketDataRequestProto)
+    {
+      if (marketDataRequestProto == null) return;
+      if (!CheckConnection()) return;
+
+      var paramsList = new BinaryWriter(new MemoryStream());
+      var lengthPos = prepareBuffer(paramsList);
+
+      int reqId = marketDataRequestProto.HasReqId ? marketDataRequestProto.ReqId : IncomingMessage.NotValid;
+
+      try
+      {
+        paramsList.AddParameter(OutgoingMessages.RequestMarketData, serverVersion);
+        paramsList.AddParameter(marketDataRequestProto.ToByteArray());
+      }
+      catch (EClientException e)
+      {
+        wrapper.error(reqId, Util.CurrentTimeMillis(), e.Err.Code, e.Err.Message + e.Text, "");
+        return;
+      }
+
+      CloseAndSend(reqId, paramsList, lengthPos, EClientErrors.FAIL_SEND_REQMKT);
     }
 
     /**
@@ -1763,6 +2808,12 @@ namespace IBApi
      */
     public void reqMarketDataType(int marketDataType)
     {
+      if (useProtoBuf(serverVersion, OutgoingMessages.RequestMarketDataType))
+      {
+        reqMarketDataTypeProtoBuf(EClientUtils.createMarketDataTypeRequestProto(marketDataType));
+        return;
+      }
+
       if (!CheckConnection()) return;
       if (!CheckServerVersion(MinServerVer.REQ_MARKET_DATA_TYPE, " It does not support market data type requests.")) return;
 
@@ -1770,14 +2821,36 @@ namespace IBApi
       var paramsList = new BinaryWriter(new MemoryStream());
       var lengthPos = prepareBuffer(paramsList);
 
-      paramsList.AddParameter(OutgoingMessages.RequestMarketDataType);
+      paramsList.AddParameter(OutgoingMessages.RequestMarketDataType, serverVersion);
       paramsList.AddParameter(VERSION);
       paramsList.AddParameter(marketDataType);
       CloseAndSend(paramsList, lengthPos, EClientErrors.FAIL_SEND_REQMARKETDATATYPE);
     }
 
+    public void reqMarketDataTypeProtoBuf(protobuf.MarketDataTypeRequest marketDataTypeRequestProto)
+    {
+      if (marketDataTypeRequestProto == null) return;
+      if (!CheckConnection()) return;
+
+      var paramsList = new BinaryWriter(new MemoryStream());
+      var lengthPos = prepareBuffer(paramsList);
+
+      try
+      {
+        paramsList.AddParameter(OutgoingMessages.RequestMarketDataType, serverVersion);
+        paramsList.AddParameter(marketDataTypeRequestProto.ToByteArray());
+      }
+      catch (EClientException e)
+      {
+        wrapper.error(int.MaxValue, Util.CurrentTimeMillis(), e.Err.Code, e.Err.Message + e.Text, "");
+        return;
+      }
+
+      CloseAndSend(int.MaxValue, paramsList, lengthPos, EClientErrors.FAIL_SEND_REQMARKETDATATYPE);
+    }
+
     /**
-     * @brief Requests the contract's market depth (order book).\n This request must be direct-routed to an exchange and not smart-routed. The number of simultaneous market depth requests allowed in an account is calculated based on a formula that looks at an accounts equity, commissions, and quote booster packs.
+     * @brief Requests the contract's market depth (order book).\n This request must be direct-routed to an exchange and not smart-routed. The number of simultaneous market depth requests allowed in an account is calculated based on a formula that looks at an accounts equity, commission and fees, and quote booster packs.
      * @param tickerId the request's identifier
      * @param contract the Contract for which the depth is being requested
      * @param numRows the number of rows on each side of the order book
@@ -1786,6 +2859,12 @@ namespace IBApi
      */
     public void reqMarketDepth(int tickerId, Contract contract, int numRows, bool isSmartDepth, List<TagValue> mktDepthOptions)
     {
+      if (useProtoBuf(serverVersion, OutgoingMessages.RequestMarketDepth))
+      {
+        reqMarketDepthProtoBuf(EClientUtils.createMarketDepthRequestProto(tickerId, contract, numRows, isSmartDepth, mktDepthOptions));
+        return;
+      }
+
       if (!CheckConnection()) return;
       if ((!IsEmpty(contract.TradingClass) || contract.ConId > 0) && !CheckServerVersion(tickerId, MinServerVer.TRADING_CLASS, " It does not support ConId nor TradingClass parameters in reqMktDepth.")) return;
       if (isSmartDepth && !CheckServerVersion(tickerId, MinServerVer.SMART_DEPTH, " It does not support SMART depth request.")) return;
@@ -1797,7 +2876,7 @@ namespace IBApi
 
       try
       {
-        paramsList.AddParameter(OutgoingMessages.RequestMarketDepth);
+        paramsList.AddParameter(OutgoingMessages.RequestMarketDepth, serverVersion);
         paramsList.AddParameter(VERSION);
         paramsList.AddParameter(tickerId);
         // paramsList.AddParameter contract fields
@@ -1805,7 +2884,7 @@ namespace IBApi
         paramsList.AddParameter(contract.Symbol);
         paramsList.AddParameter(contract.SecType);
         paramsList.AddParameter(contract.LastTradeDateOrContractMonth);
-        paramsList.AddParameter(contract.Strike);
+        paramsList.AddParameterMax(contract.Strike);
         paramsList.AddParameter(contract.Right);
         if (serverVersion >= 15) paramsList.AddParameter(contract.Multiplier);
         paramsList.AddParameter(contract.Exchange);
@@ -1819,11 +2898,35 @@ namespace IBApi
       }
       catch (EClientException e)
       {
-        wrapper.error(tickerId, e.Err.Code, e.Err.Message + e.Text, "");
+        wrapper.error(tickerId, Util.CurrentTimeMillis(), e.Err.Code, e.Err.Message + e.Text, "");
         return;
       }
 
       CloseAndSend(tickerId, paramsList, lengthPos, EClientErrors.FAIL_SEND_REQMKTDEPTH);
+    }
+
+    public void reqMarketDepthProtoBuf(protobuf.MarketDepthRequest marketDepthRequestProto)
+    {
+      if (marketDepthRequestProto == null) return;
+      if (!CheckConnection()) return;
+
+      var paramsList = new BinaryWriter(new MemoryStream());
+      var lengthPos = prepareBuffer(paramsList);
+
+      int reqId = marketDepthRequestProto.HasReqId ? marketDepthRequestProto.ReqId : IncomingMessage.NotValid;
+
+      try
+      {
+        paramsList.AddParameter(OutgoingMessages.RequestMarketDepth, serverVersion);
+        paramsList.AddParameter(marketDepthRequestProto.ToByteArray());
+      }
+      catch (EClientException e)
+      {
+        wrapper.error(reqId, Util.CurrentTimeMillis(), e.Err.Code, e.Err.Message + e.Text, "");
+        return;
+      }
+
+      CloseAndSend(reqId, paramsList, lengthPos, EClientErrors.FAIL_SEND_REQMKTDEPTH);
     }
 
     /**
@@ -1833,15 +2936,35 @@ namespace IBApi
      */
     public void reqNewsBulletins(bool allMessages)
     {
+      if (useProtoBuf(serverVersion, OutgoingMessages.RequestNewsBulletins))
+      {
+        reqNewsBulletinsProtoBuf(EClientUtils.createNewsBulletinsRequestProto(allMessages));
+        return;
+      }
+
       if (!CheckConnection()) return;
 
       const int VERSION = 1;
       var paramsList = new BinaryWriter(new MemoryStream());
       var lengthPos = prepareBuffer(paramsList);
 
-      paramsList.AddParameter(OutgoingMessages.RequestNewsBulletins);
+      paramsList.AddParameter(OutgoingMessages.RequestNewsBulletins, serverVersion);
       paramsList.AddParameter(VERSION);
       paramsList.AddParameter(allMessages);
+      CloseAndSend(paramsList, lengthPos, EClientErrors.FAIL_GENERIC);
+    }
+
+    public void reqNewsBulletinsProtoBuf(protobuf.NewsBulletinsRequest newsBulletinsRequestProto)
+    {
+      if (newsBulletinsRequestProto == null) return;
+      if (!CheckConnection()) return;
+
+      var paramsList = new BinaryWriter(new MemoryStream());
+      var lengthPos = prepareBuffer(paramsList);
+
+      paramsList.AddParameter(OutgoingMessages.RequestNewsBulletins, serverVersion);
+      paramsList.AddParameter(newsBulletinsRequestProto.ToByteArray());
+
       CloseAndSend(paramsList, lengthPos, EClientErrors.FAIL_GENERIC);
     }
 
@@ -1851,13 +2974,33 @@ namespace IBApi
      */
     public void reqOpenOrders()
     {
+      if (useProtoBuf(serverVersion, OutgoingMessages.RequestOpenOrders))
+      {
+        reqOpenOrdersProtoBuf(EClientUtils.createOpenOrdersRequestProto());
+        return;
+      }
+
       var VERSION = 1;
       if (!CheckConnection()) return;
       var paramsList = new BinaryWriter(new MemoryStream());
       var lengthPos = prepareBuffer(paramsList);
 
-      paramsList.AddParameter(OutgoingMessages.RequestOpenOrders);
+      paramsList.AddParameter(OutgoingMessages.RequestOpenOrders, serverVersion);
       paramsList.AddParameter(VERSION);
+      CloseAndSend(paramsList, lengthPos, EClientErrors.FAIL_SEND_OORDER);
+    }
+
+    public void reqOpenOrdersProtoBuf(protobuf.OpenOrdersRequest openOrdersRequestProto)
+    {
+      if (openOrdersRequestProto == null) return;
+      if (!CheckConnection()) return;
+
+      var paramsList = new BinaryWriter(new MemoryStream());
+      var lengthPos = prepareBuffer(paramsList);
+
+      paramsList.AddParameter(OutgoingMessages.RequestOpenOrders, serverVersion);
+      paramsList.AddParameter(openOrdersRequestProto.ToByteArray());
+
       CloseAndSend(paramsList, lengthPos, EClientErrors.FAIL_SEND_OORDER);
     }
 
@@ -1867,6 +3010,12 @@ namespace IBApi
      */
     public void reqPositions()
     {
+      if (useProtoBuf(serverVersion, OutgoingMessages.RequestPositions))
+      {
+        reqPositionsProtoBuf(EClientUtils.createPositionsRequestProto());
+        return;
+      }
+
       if (!CheckConnection()) return;
       if (!CheckServerVersion(MinServerVer.ACCT_SUMMARY, " It does not support position requests.")) return;
 
@@ -1874,8 +3023,30 @@ namespace IBApi
       var paramsList = new BinaryWriter(new MemoryStream());
       var lengthPos = prepareBuffer(paramsList);
 
-      paramsList.AddParameter(OutgoingMessages.RequestPositions);
+      paramsList.AddParameter(OutgoingMessages.RequestPositions, serverVersion);
       paramsList.AddParameter(VERSION);
+      CloseAndSend(paramsList, lengthPos, EClientErrors.FAIL_SEND_REQPOSITIONS);
+    }
+
+    public void reqPositionsProtoBuf(protobuf.PositionsRequest positionsRequestProto)
+    {
+      if (positionsRequestProto == null) return;
+      if (!CheckConnection()) return;
+
+      var paramsList = new BinaryWriter(new MemoryStream());
+      var lengthPos = prepareBuffer(paramsList);
+
+      try
+      {
+        paramsList.AddParameter(OutgoingMessages.RequestPositions, serverVersion);
+        paramsList.AddParameter(positionsRequestProto.ToByteArray());
+      }
+      catch (EClientException e)
+      {
+        wrapper.error(IncomingMessage.NotValid, Util.CurrentTimeMillis(), e.Err.Code, e.Err.Message + e.Text, "");
+        return;
+      }
+
       CloseAndSend(paramsList, lengthPos, EClientErrors.FAIL_SEND_REQPOSITIONS);
     }
 
@@ -1895,6 +3066,12 @@ namespace IBApi
      */
     public void reqRealTimeBars(int tickerId, Contract contract, int barSize, string whatToShow, bool useRTH, List<TagValue> realTimeBarsOptions)
     {
+      if (useProtoBuf(serverVersion, OutgoingMessages.RequestRealTimeBars))
+      {
+        reqRealTimeBarsProtoBuf(EClientUtils.createRealTimeBarsRequestProto(tickerId, contract, barSize, whatToShow, useRTH, realTimeBarsOptions));
+        return;
+      }
+
       if (!CheckConnection()) return;
       if (!CheckServerVersion(tickerId, MinServerVer.REAL_TIME_BARS, " It does not support real time bars.")) return;
       if ((!IsEmpty(contract.TradingClass) || contract.ConId > 0) && !CheckServerVersion(tickerId, MinServerVer.TRADING_CLASS, " It does not support ConId nor TradingClass parameters in reqRealTimeBars.")) return;
@@ -1905,7 +3082,7 @@ namespace IBApi
 
       try
       {
-        paramsList.AddParameter(OutgoingMessages.RequestRealTimeBars);
+        paramsList.AddParameter(OutgoingMessages.RequestRealTimeBars, serverVersion);
         paramsList.AddParameter(VERSION);
         paramsList.AddParameter(tickerId);
         // paramsList.AddParameter contract fields
@@ -1913,7 +3090,7 @@ namespace IBApi
         paramsList.AddParameter(contract.Symbol);
         paramsList.AddParameter(contract.SecType);
         paramsList.AddParameter(contract.LastTradeDateOrContractMonth);
-        paramsList.AddParameter(contract.Strike);
+        paramsList.AddParameterMax(contract.Strike);
         paramsList.AddParameter(contract.Right);
         paramsList.AddParameter(contract.Multiplier);
         paramsList.AddParameter(contract.Exchange);
@@ -1928,11 +3105,35 @@ namespace IBApi
       }
       catch (EClientException e)
       {
-        wrapper.error(tickerId, e.Err.Code, e.Err.Message + e.Text, "");
+        wrapper.error(tickerId, Util.CurrentTimeMillis(), e.Err.Code, e.Err.Message + e.Text, "");
         return;
       }
 
       CloseAndSend(tickerId, paramsList, lengthPos, EClientErrors.FAIL_SEND_REQRTBARS);
+    }
+
+    public void reqRealTimeBarsProtoBuf(protobuf.RealTimeBarsRequest realTimeBarsRequestProto)
+    {
+      if (realTimeBarsRequestProto == null) return;
+      if (!CheckConnection()) return;
+
+      var paramsList = new BinaryWriter(new MemoryStream());
+      var lengthPos = prepareBuffer(paramsList);
+
+      int reqId = realTimeBarsRequestProto.HasReqId ? realTimeBarsRequestProto.ReqId : IncomingMessage.NotValid;
+
+      try
+      {
+        paramsList.AddParameter(OutgoingMessages.RequestRealTimeBars, serverVersion);
+        paramsList.AddParameter(realTimeBarsRequestProto.ToByteArray());
+      }
+      catch (EClientException e)
+      {
+        wrapper.error(reqId, Util.CurrentTimeMillis(), e.Err.Code, e.Err.Message + e.Text, "");
+        return;
+      }
+
+      CloseAndSend(reqId, paramsList, lengthPos, EClientErrors.FAIL_SEND_REQRTBARS);
     }
 
     /**
@@ -1942,14 +3143,34 @@ namespace IBApi
      */
     public void reqScannerParameters()
     {
+      if (useProtoBuf(serverVersion, OutgoingMessages.RequestScannerParameters))
+      {
+        reqScannerParametersProtoBuf(EClientUtils.createScannerParametersRequestProto());
+        return;
+      }
+
       if (!CheckConnection()) return;
 
       const int VERSION = 1;
       var paramsList = new BinaryWriter(new MemoryStream());
       var lengthPos = prepareBuffer(paramsList);
 
-      paramsList.AddParameter(OutgoingMessages.RequestScannerParameters);
+      paramsList.AddParameter(OutgoingMessages.RequestScannerParameters, serverVersion);
       paramsList.AddParameter(VERSION);
+      CloseAndSend(paramsList, lengthPos, EClientErrors.FAIL_SEND_REQSCANNERPARAMETERS);
+    }
+
+    public void reqScannerParametersProtoBuf(protobuf.ScannerParametersRequest scannerParametersRequestProto)
+    {
+      if (scannerParametersRequestProto == null) return;
+      if (!CheckConnection()) return;
+
+      var paramsList = new BinaryWriter(new MemoryStream());
+      var lengthPos = prepareBuffer(paramsList);
+
+      paramsList.AddParameter(OutgoingMessages.RequestScannerParameters, serverVersion);
+      paramsList.AddParameter(scannerParametersRequestProto.ToByteArray());
+
       CloseAndSend(paramsList, lengthPos, EClientErrors.FAIL_SEND_REQSCANNERPARAMETERS);
     }
 
@@ -1959,7 +3180,16 @@ namespace IBApi
      * @param subscription summary of the scanner subscription including its filters.
      * @sa reqScannerParameters, ScannerSubscription, EWrapper::scannerData
      */
-    public void reqScannerSubscription(int reqId, ScannerSubscription subscription, List<TagValue> scannerSubscriptionOptions, List<TagValue> scannerSubscriptionFilterOptions) => reqScannerSubscription(reqId, subscription, Util.TagValueListToString(scannerSubscriptionOptions), Util.TagValueListToString(scannerSubscriptionFilterOptions));
+    public void reqScannerSubscription(int reqId, ScannerSubscription subscription, List<TagValue> scannerSubscriptionOptions, List<TagValue> scannerSubscriptionFilterOptions)
+    {
+      if (useProtoBuf(serverVersion, OutgoingMessages.RequestScannerSubscription))
+      {
+        reqScannerSubscriptionProtoBuf(EClientUtils.createScannerSubscriptionRequestProto(reqId, subscription, scannerSubscriptionOptions, scannerSubscriptionFilterOptions));
+        return;
+      }
+
+      reqScannerSubscription(reqId, subscription, Util.TagValueListToString(scannerSubscriptionOptions), Util.TagValueListToString(scannerSubscriptionFilterOptions));
+    }
 
     public void reqScannerSubscription(int reqId, ScannerSubscription subscription, string scannerSubscriptionOptions, string scannerSubscriptionFilterOptions)
     {
@@ -1972,7 +3202,7 @@ namespace IBApi
 
       try
       {
-        paramsList.AddParameter(OutgoingMessages.RequestScannerSubscription);
+        paramsList.AddParameter(OutgoingMessages.RequestScannerSubscription, serverVersion);
         if (serverVersion < MinServerVer.SCANNER_GENERIC_OPTS) paramsList.AddParameter(VERSION);
         paramsList.AddParameter(reqId);
         paramsList.AddParameterMax(subscription.NumberOfRows);
@@ -2007,7 +3237,31 @@ namespace IBApi
       }
       catch (EClientException e)
       {
-        wrapper.error(reqId, e.Err.Code, e.Err.Message + e.Text, "");
+        wrapper.error(reqId, Util.CurrentTimeMillis(), e.Err.Code, e.Err.Message + e.Text, "");
+        return;
+      }
+
+      CloseAndSend(reqId, paramsList, lengthPos, EClientErrors.FAIL_SEND_REQSCANNER);
+    }
+
+    public void reqScannerSubscriptionProtoBuf(protobuf.ScannerSubscriptionRequest scannerSubscriptionRequestProto)
+    {
+      if (scannerSubscriptionRequestProto == null) return;
+      if (!CheckConnection()) return;
+
+      var paramsList = new BinaryWriter(new MemoryStream());
+      var lengthPos = prepareBuffer(paramsList);
+
+      int reqId = scannerSubscriptionRequestProto.HasReqId ? scannerSubscriptionRequestProto.ReqId : IncomingMessage.NotValid;
+
+      try
+      {
+        paramsList.AddParameter(OutgoingMessages.RequestScannerSubscription, serverVersion);
+        paramsList.AddParameter(scannerSubscriptionRequestProto.ToByteArray());
+      }
+      catch (EClientException e)
+      {
+        wrapper.error(reqId, Util.CurrentTimeMillis(), e.Err.Code, e.Err.Message + e.Text, "");
         return;
       }
 
@@ -2027,6 +3281,12 @@ namespace IBApi
      */
     public void setServerLogLevel(int logLevel)
     {
+      if (useProtoBuf(serverVersion, OutgoingMessages.ChangeServerLog))
+      {
+        setServerLogLevelProtoBuf(EClientUtils.createSetServerLogLevelRequestProto(logLevel));
+        return;
+      }
+
       if (!CheckConnection()) return;
 
       const int VERSION = 1;
@@ -2034,9 +3294,31 @@ namespace IBApi
       var paramsList = new BinaryWriter(new MemoryStream());
       var lengthPos = prepareBuffer(paramsList);
 
-      paramsList.AddParameter(OutgoingMessages.ChangeServerLog);
+      paramsList.AddParameter(OutgoingMessages.ChangeServerLog, serverVersion);
       paramsList.AddParameter(VERSION);
       paramsList.AddParameter(logLevel);
+
+      CloseAndSend(paramsList, lengthPos, EClientErrors.FAIL_SEND_SERVER_LOG_LEVEL);
+    }
+
+    public void setServerLogLevelProtoBuf(protobuf.SetServerLogLevelRequest setServerLogLevelRequestProto)
+    {
+      if (setServerLogLevelRequestProto == null) return;
+      if (!CheckConnection()) return;
+
+      var paramsList = new BinaryWriter(new MemoryStream());
+      var lengthPos = prepareBuffer(paramsList);
+
+      try
+      {
+        paramsList.AddParameter(OutgoingMessages.ChangeServerLog, serverVersion);
+        paramsList.AddParameter(setServerLogLevelRequestProto.ToByteArray());
+      }
+      catch (EClientException e)
+      {
+        wrapper.error(IncomingMessage.NotValid, Util.CurrentTimeMillis(), e.Err.Code, e.Err.Message + e.Text, "");
+        return;
+      }
 
       CloseAndSend(paramsList, lengthPos, EClientErrors.FAIL_SEND_SERVER_LOG_LEVEL);
     }
@@ -2046,11 +3328,17 @@ namespace IBApi
      */
     public void verifyRequest(string apiName, string apiVersion)
     {
+      if (useProtoBuf(serverVersion, OutgoingMessages.VerifyRequest))
+      {
+        verifyRequestProtoBuf(EClientUtils.createVerifyRequestProto(apiName, apiVersion));
+        return;
+      }
+
       if (!CheckConnection()) return;
       if (!CheckServerVersion(MinServerVer.LINKING, " It does not support verification request.")) return;
       if (!extraAuth)
       {
-        ReportError(IncomingMessage.NotValid, EClientErrors.FAIL_SEND_VERIFYMESSAGE, " Intent to authenticate needs to be expressed during initial connect request.");
+        ReportError(IncomingMessage.NotValid, Util.CurrentTimeMillis(), EClientErrors.FAIL_SEND_VERIFYMESSAGE, " Intent to authenticate needs to be expressed during initial connect request.");
         return;
       }
 
@@ -2060,14 +3348,41 @@ namespace IBApi
 
       try
       {
-        paramsList.AddParameter(OutgoingMessages.VerifyRequest);
+        paramsList.AddParameter(OutgoingMessages.VerifyRequest, serverVersion);
         paramsList.AddParameter(VERSION);
         paramsList.AddParameter(apiName);
         paramsList.AddParameter(apiVersion);
       }
       catch (EClientException e)
       {
-        wrapper.error(IncomingMessage.NotValid, e.Err.Code, e.Err.Message + e.Text, "");
+        wrapper.error(IncomingMessage.NotValid, Util.CurrentTimeMillis(), e.Err.Code, e.Err.Message + e.Text, "");
+        return;
+      }
+
+      CloseAndSend(paramsList, lengthPos, EClientErrors.FAIL_SEND_VERIFYREQUEST);
+    }
+
+    public void verifyRequestProtoBuf(protobuf.VerifyRequest verifyRequestProto)
+    {
+      if (verifyRequestProto == null) return;
+      if (!CheckConnection()) return;
+      if (!extraAuth)
+      {
+        ReportError(IncomingMessage.NotValid, Util.CurrentTimeMillis(), EClientErrors.FAIL_SEND_VERIFYMESSAGE, " Intent to authenticate needs to be expressed during initial connect request.");
+        return;
+      }
+
+      var paramsList = new BinaryWriter(new MemoryStream());
+      var lengthPos = prepareBuffer(paramsList);
+
+      try
+      {
+        paramsList.AddParameter(OutgoingMessages.VerifyRequest, serverVersion);
+        paramsList.AddParameter(verifyRequestProto.ToByteArray());
+      }
+      catch (EClientException e)
+      {
+        wrapper.error(IncomingMessage.NotValid, Util.CurrentTimeMillis(), e.Err.Code, e.Err.Message + e.Text, "");
         return;
       }
 
@@ -2079,6 +3394,12 @@ namespace IBApi
      */
     public void verifyMessage(string apiData)
     {
+      if (useProtoBuf(serverVersion, OutgoingMessages.VerifyMessage))
+      {
+        verifyMessageProtoBuf(EClientUtils.createVerifyMessageRequestProto(apiData));
+        return;
+      }
+
       if (!CheckConnection()) return;
       if (!CheckServerVersion(MinServerVer.LINKING, " It does not support verification message sending.")) return;
 
@@ -2088,13 +3409,35 @@ namespace IBApi
 
       try
       {
-        paramsList.AddParameter(OutgoingMessages.VerifyMessage);
+        paramsList.AddParameter(OutgoingMessages.VerifyMessage, serverVersion);
         paramsList.AddParameter(VERSION);
         paramsList.AddParameter(apiData);
       }
       catch (EClientException e)
       {
-        wrapper.error(IncomingMessage.NotValid, e.Err.Code, e.Err.Message + e.Text, "");
+        wrapper.error(IncomingMessage.NotValid, Util.CurrentTimeMillis(), e.Err.Code, e.Err.Message + e.Text, "");
+        return;
+      }
+
+      CloseAndSend(paramsList, lengthPos, EClientErrors.FAIL_SEND_VERIFYMESSAGE);
+    }
+
+    public void verifyMessageProtoBuf(protobuf.VerifyMessageRequest verifyMessageRequestProto)
+    {
+      if (verifyMessageRequestProto == null) return;
+      if (!CheckConnection()) return;
+
+      var paramsList = new BinaryWriter(new MemoryStream());
+      var lengthPos = prepareBuffer(paramsList);
+
+      try
+      {
+        paramsList.AddParameter(OutgoingMessages.VerifyMessage, serverVersion);
+        paramsList.AddParameter(verifyMessageRequestProto.ToByteArray());
+      }
+      catch (EClientException e)
+      {
+        wrapper.error(IncomingMessage.NotValid, Util.CurrentTimeMillis(), e.Err.Code, e.Err.Message + e.Text, "");
         return;
       }
 
@@ -2110,7 +3453,7 @@ namespace IBApi
       if (!CheckServerVersion(MinServerVer.LINKING_AUTH, " It does not support verification request.")) return;
       if (!extraAuth)
       {
-        ReportError(IncomingMessage.NotValid, EClientErrors.FAIL_SEND_VERIFYANDAUTHMESSAGE, " Intent to authenticate needs to be expressed during initial connect request.");
+        ReportError(IncomingMessage.NotValid, Util.CurrentTimeMillis(), EClientErrors.FAIL_SEND_VERIFYANDAUTHMESSAGE, " Intent to authenticate needs to be expressed during initial connect request.");
         return;
       }
 
@@ -2120,7 +3463,7 @@ namespace IBApi
 
       try
       {
-        paramsList.AddParameter(OutgoingMessages.VerifyAndAuthRequest);
+        paramsList.AddParameter(OutgoingMessages.VerifyAndAuthRequest, serverVersion);
         paramsList.AddParameter(VERSION);
         paramsList.AddParameter(apiName);
         paramsList.AddParameter(apiVersion);
@@ -2128,7 +3471,7 @@ namespace IBApi
       }
       catch (EClientException e)
       {
-        wrapper.error(IncomingMessage.NotValid, e.Err.Code, e.Err.Message + e.Text, "");
+        wrapper.error(IncomingMessage.NotValid, Util.CurrentTimeMillis(), e.Err.Code, e.Err.Message + e.Text, "");
         return;
       }
 
@@ -2149,14 +3492,14 @@ namespace IBApi
 
       try
       {
-        paramsList.AddParameter(OutgoingMessages.VerifyAndAuthMessage);
+        paramsList.AddParameter(OutgoingMessages.VerifyAndAuthMessage, serverVersion);
         paramsList.AddParameter(VERSION);
         paramsList.AddParameter(apiData);
         paramsList.AddParameter(xyzResponse);
       }
       catch (EClientException e)
       {
-        wrapper.error(IncomingMessage.NotValid, e.Err.Code, e.Err.Message + e.Text, "");
+        wrapper.error(IncomingMessage.NotValid, Util.CurrentTimeMillis(), e.Err.Code, e.Err.Message + e.Text, "");
         return;
       }
 
@@ -2169,6 +3512,12 @@ namespace IBApi
      */
     public void queryDisplayGroups(int requestId)
     {
+      if (useProtoBuf(serverVersion, OutgoingMessages.QueryDisplayGroups))
+      {
+        queryDisplayGroupsProtoBuf(EClientUtils.createQueryDisplayGroupsRequestProto(requestId));
+        return;
+      }
+
       if (!CheckConnection()) return;
       if (!CheckServerVersion(MinServerVer.LINKING, " It does not support queryDisplayGroups request.")) return;
 
@@ -2176,10 +3525,34 @@ namespace IBApi
       var paramsList = new BinaryWriter(new MemoryStream());
       var lengthPos = prepareBuffer(paramsList);
 
-      paramsList.AddParameter(OutgoingMessages.QueryDisplayGroups);
+      paramsList.AddParameter(OutgoingMessages.QueryDisplayGroups, serverVersion);
       paramsList.AddParameter(VERSION);
       paramsList.AddParameter(requestId);
       CloseAndSend(paramsList, lengthPos, EClientErrors.FAIL_SEND_QUERYDISPLAYGROUPS);
+    }
+
+    public void queryDisplayGroupsProtoBuf(protobuf.QueryDisplayGroupsRequest queryDisplayGroupsRequestProto)
+    {
+      if (queryDisplayGroupsRequestProto == null) return;
+      if (!CheckConnection()) return;
+
+      var paramsList = new BinaryWriter(new MemoryStream());
+      var lengthPos = prepareBuffer(paramsList);
+
+      int requestId = queryDisplayGroupsRequestProto.HasReqId ? queryDisplayGroupsRequestProto.ReqId : IncomingMessage.NotValid;
+
+      try
+      {
+        paramsList.AddParameter(OutgoingMessages.QueryDisplayGroups, serverVersion);
+        paramsList.AddParameter(queryDisplayGroupsRequestProto.ToByteArray());
+      }
+      catch (EClientException e)
+      {
+        wrapper.error(requestId, Util.CurrentTimeMillis(), e.Err.Code, e.Err.Message + e.Text, "");
+        return;
+      }
+
+      CloseAndSend(requestId, paramsList, lengthPos, EClientErrors.FAIL_SEND_QUERYDISPLAYGROUPS);
     }
 
     /**
@@ -2189,6 +3562,12 @@ namespace IBApi
      */
     public void subscribeToGroupEvents(int requestId, int groupId)
     {
+      if (useProtoBuf(serverVersion, OutgoingMessages.SubscribeToGroupEvents))
+      {
+        subscribeToGroupEventsProtoBuf(EClientUtils.createSubscribeToGroupEventsRequestProto(requestId, groupId));
+        return;
+      }
+
       if (!CheckConnection()) return;
       if (!CheckServerVersion(MinServerVer.LINKING, " It does not support subscribeToGroupEvents request.")) return;
 
@@ -2196,11 +3575,35 @@ namespace IBApi
       var paramsList = new BinaryWriter(new MemoryStream());
       var lengthPos = prepareBuffer(paramsList);
 
-      paramsList.AddParameter(OutgoingMessages.SubscribeToGroupEvents);
+      paramsList.AddParameter(OutgoingMessages.SubscribeToGroupEvents, serverVersion);
       paramsList.AddParameter(VERSION);
       paramsList.AddParameter(requestId);
       paramsList.AddParameter(groupId);
       CloseAndSend(paramsList, lengthPos, EClientErrors.FAIL_SEND_SUBSCRIBETOGROUPEVENTS);
+    }
+
+    public void subscribeToGroupEventsProtoBuf(protobuf.SubscribeToGroupEventsRequest subscribeToGroupEventsRequestProto)
+    {
+      if (subscribeToGroupEventsRequestProto == null) return;
+      if (!CheckConnection()) return;
+
+      var paramsList = new BinaryWriter(new MemoryStream());
+      var lengthPos = prepareBuffer(paramsList);
+
+      int requestId = subscribeToGroupEventsRequestProto.HasReqId ? subscribeToGroupEventsRequestProto.ReqId : IncomingMessage.NotValid;
+
+      try
+      {
+        paramsList.AddParameter(OutgoingMessages.SubscribeToGroupEvents, serverVersion);
+        paramsList.AddParameter(subscribeToGroupEventsRequestProto.ToByteArray());
+      }
+      catch (EClientException e)
+      {
+        wrapper.error(requestId, Util.CurrentTimeMillis(), e.Err.Code, e.Err.Message + e.Text, "");
+        return;
+      }
+
+      CloseAndSend(requestId, paramsList, lengthPos, EClientErrors.FAIL_SEND_SUBSCRIBETOGROUPEVENTS);
     }
 
     /**
@@ -2214,6 +3617,12 @@ namespace IBApi
      */
     public void updateDisplayGroup(int requestId, string contractInfo)
     {
+      if (useProtoBuf(serverVersion, OutgoingMessages.UpdateDisplayGroup))
+      {
+        updateDisplayGroupProtoBuf(EClientUtils.createUpdateDisplayGroupRequestProto(requestId, contractInfo));
+        return;
+      }
+
       if (!CheckConnection()) return;
       if (!CheckServerVersion(MinServerVer.LINKING, " It does not support updateDisplayGroup request.")) return;
 
@@ -2223,14 +3632,38 @@ namespace IBApi
 
       try
       {
-        paramsList.AddParameter(OutgoingMessages.UpdateDisplayGroup);
+        paramsList.AddParameter(OutgoingMessages.UpdateDisplayGroup, serverVersion);
         paramsList.AddParameter(VERSION);
         paramsList.AddParameter(requestId);
         paramsList.AddParameter(contractInfo);
       }
       catch (EClientException e)
       {
-        wrapper.error(requestId, e.Err.Code, e.Err.Message + e.Text, "");
+        wrapper.error(requestId, Util.CurrentTimeMillis(), e.Err.Code, e.Err.Message + e.Text, "");
+        return;
+      }
+
+      CloseAndSend(requestId, paramsList, lengthPos, EClientErrors.FAIL_SEND_UPDATEDISPLAYGROUP);
+    }
+
+    public void updateDisplayGroupProtoBuf(protobuf.UpdateDisplayGroupRequest updateDisplayGroupRequestProto)
+    {
+      if (updateDisplayGroupRequestProto == null) return;
+      if (!CheckConnection()) return;
+
+      var paramsList = new BinaryWriter(new MemoryStream());
+      var lengthPos = prepareBuffer(paramsList);
+
+      int requestId = updateDisplayGroupRequestProto.HasReqId ? updateDisplayGroupRequestProto.ReqId : IncomingMessage.NotValid;
+
+      try
+      {
+        paramsList.AddParameter(OutgoingMessages.UpdateDisplayGroup, serverVersion);
+        paramsList.AddParameter(updateDisplayGroupRequestProto.ToByteArray());
+      }
+      catch (EClientException e)
+      {
+        wrapper.error(requestId, Util.CurrentTimeMillis(), e.Err.Code, e.Err.Message + e.Text, "");
         return;
       }
 
@@ -2242,6 +3675,12 @@ namespace IBApi
      */
     public void unsubscribeFromGroupEvents(int requestId)
     {
+      if (useProtoBuf(serverVersion, OutgoingMessages.UnsubscribeFromGroupEvents))
+      {
+        unsubscribeFromGroupEventsProtoBuf(EClientUtils.createUnsubscribeFromGroupEventsRequestProto(requestId));
+        return;
+      }
+
       if (!CheckConnection()) return;
       if (!CheckServerVersion(MinServerVer.LINKING, " It does not support unsubscribeFromGroupEvents request.")) return;
 
@@ -2249,10 +3688,34 @@ namespace IBApi
       var paramsList = new BinaryWriter(new MemoryStream());
       var lengthPos = prepareBuffer(paramsList);
 
-      paramsList.AddParameter(OutgoingMessages.UnsubscribeFromGroupEvents);
+      paramsList.AddParameter(OutgoingMessages.UnsubscribeFromGroupEvents, serverVersion);
       paramsList.AddParameter(VERSION);
       paramsList.AddParameter(requestId);
       CloseAndSend(paramsList, lengthPos, EClientErrors.FAIL_SEND_UNSUBSCRIBEFROMGROUPEVENTS);
+    }
+
+    public void unsubscribeFromGroupEventsProtoBuf(protobuf.UnsubscribeFromGroupEventsRequest unsubscribeFromGroupEventsRequestProto)
+    {
+      if (unsubscribeFromGroupEventsRequestProto == null) return;
+      if (!CheckConnection()) return;
+
+      var paramsList = new BinaryWriter(new MemoryStream());
+      var lengthPos = prepareBuffer(paramsList);
+
+      int requestId = unsubscribeFromGroupEventsRequestProto.HasReqId ? unsubscribeFromGroupEventsRequestProto.ReqId : IncomingMessage.NotValid;
+
+      try
+      {
+        paramsList.AddParameter(OutgoingMessages.UnsubscribeFromGroupEvents, serverVersion);
+        paramsList.AddParameter(unsubscribeFromGroupEventsRequestProto.ToByteArray());
+      }
+      catch (EClientException e)
+      {
+        wrapper.error(requestId, Util.CurrentTimeMillis(), e.Err.Code, e.Err.Message + e.Text, "");
+        return;
+      }
+
+      CloseAndSend(requestId, paramsList, lengthPos, EClientErrors.FAIL_SEND_UNSUBSCRIBEFROMGROUPEVENTS);
     }
 
     /**
@@ -2265,6 +3728,12 @@ namespace IBApi
      */
     public void reqPositionsMulti(int requestId, string account, string modelCode)
     {
+      if (useProtoBuf(serverVersion, OutgoingMessages.RequestPositionsMulti))
+      {
+        reqPositionsMultiProtoBuf(EClientUtils.createPositionsMultiRequestProto(requestId, account, modelCode));
+        return;
+      }
+
       if (!CheckConnection()) return;
       if (!CheckServerVersion(MinServerVer.MODELS_SUPPORT, " It does not support positions multi requests.")) return;
 
@@ -2274,7 +3743,7 @@ namespace IBApi
 
       try
       {
-        paramsList.AddParameter(OutgoingMessages.RequestPositionsMulti);
+        paramsList.AddParameter(OutgoingMessages.RequestPositionsMulti, serverVersion);
         paramsList.AddParameter(VERSION);
         paramsList.AddParameter(requestId);
         paramsList.AddParameter(account);
@@ -2282,11 +3751,35 @@ namespace IBApi
       }
       catch (EClientException e)
       {
-        wrapper.error(requestId, e.Err.Code, e.Err.Message + e.Text, "");
+        wrapper.error(requestId, Util.CurrentTimeMillis(), e.Err.Code, e.Err.Message + e.Text, "");
         return;
       }
 
       CloseAndSend(requestId, paramsList, lengthPos, EClientErrors.FAIL_SEND_REQPOSITIONSMULTI);
+    }
+
+    public void reqPositionsMultiProtoBuf(protobuf.PositionsMultiRequest positionsMultiRequestProto)
+    {
+      if (positionsMultiRequestProto == null) return;
+      if (!CheckConnection()) return;
+
+      var paramsList = new BinaryWriter(new MemoryStream());
+      var lengthPos = prepareBuffer(paramsList);
+
+      int reqId = positionsMultiRequestProto.HasReqId ? positionsMultiRequestProto.ReqId : IncomingMessage.NotValid;
+
+      try
+      {
+        paramsList.AddParameter(OutgoingMessages.RequestPositionsMulti, serverVersion);
+        paramsList.AddParameter(positionsMultiRequestProto.ToByteArray());
+      }
+      catch (EClientException e)
+      {
+        wrapper.error(reqId, Util.CurrentTimeMillis(), e.Err.Code, e.Err.Message + e.Text, "");
+        return;
+      }
+
+      CloseAndSend(reqId, paramsList, lengthPos, EClientErrors.FAIL_SEND_REQPOSITIONSMULTI);
     }
 
     /**
@@ -2296,6 +3789,12 @@ namespace IBApi
      */
     public void cancelPositionsMulti(int requestId)
     {
+      if (useProtoBuf(serverVersion, OutgoingMessages.CancelPositionsMulti))
+      {
+        cancelPositionsMultiProtoBuf(EClientUtils.createCancelPositionsMultiRequestProto(requestId));
+        return;
+      }
+
       if (!CheckConnection()) return;
       if (!CheckServerVersion(MinServerVer.MODELS_SUPPORT, " It does not support positions multi cancellation.")) return;
 
@@ -2303,12 +3802,35 @@ namespace IBApi
       var paramsList = new BinaryWriter(new MemoryStream());
       var lengthPos = prepareBuffer(paramsList);
 
-      paramsList.AddParameter(OutgoingMessages.CancelPositionsMulti);
+      paramsList.AddParameter(OutgoingMessages.CancelPositionsMulti, serverVersion);
       paramsList.AddParameter(VERSION);
       paramsList.AddParameter(requestId);
       CloseAndSend(requestId, paramsList, lengthPos, EClientErrors.FAIL_SEND_CANPOSITIONSMULTI);
     }
 
+    public void cancelPositionsMultiProtoBuf(protobuf.CancelPositionsMulti cancelPositionsMultiProto)
+    {
+      if (cancelPositionsMultiProto == null) return;
+      if (!CheckConnection()) return;
+
+      var paramsList = new BinaryWriter(new MemoryStream());
+      var lengthPos = prepareBuffer(paramsList);
+
+      int reqId = cancelPositionsMultiProto.HasReqId ? cancelPositionsMultiProto.ReqId : IncomingMessage.NotValid;
+
+      try
+      {
+        paramsList.AddParameter(OutgoingMessages.CancelPositionsMulti, serverVersion);
+        paramsList.AddParameter(cancelPositionsMultiProto.ToByteArray());
+      }
+      catch (EClientException e)
+      {
+        wrapper.error(reqId, Util.CurrentTimeMillis(), e.Err.Code, e.Err.Message + e.Text, "");
+        return;
+      }
+
+      CloseAndSend(reqId, paramsList, lengthPos, EClientErrors.FAIL_SEND_CANPOSITIONSMULTI);
+    }
     /**
      * @brief Requests account updates for account and/or model
      * @param reqId identifier to label the request
@@ -2319,6 +3841,12 @@ namespace IBApi
      */
     public void reqAccountUpdatesMulti(int requestId, string account, string modelCode, bool ledgerAndNLV)
     {
+      if (useProtoBuf(serverVersion, OutgoingMessages.RequestAccountUpdatesMulti))
+      {
+        reqAccountUpdatesMultiProtoBuf(EClientUtils.createAccountUpdatesMultiRequestProto(requestId, account, modelCode, ledgerAndNLV));
+        return;
+      }
+
       if (!CheckConnection()) return;
       if (!CheckServerVersion(MinServerVer.MODELS_SUPPORT, " It does not support account updates multi requests.")) return;
 
@@ -2328,7 +3856,7 @@ namespace IBApi
 
       try
       {
-        paramsList.AddParameter(OutgoingMessages.RequestAccountUpdatesMulti);
+        paramsList.AddParameter(OutgoingMessages.RequestAccountUpdatesMulti, serverVersion);
         paramsList.AddParameter(VERSION);
         paramsList.AddParameter(requestId);
         paramsList.AddParameter(account);
@@ -2337,11 +3865,35 @@ namespace IBApi
       }
       catch (EClientException e)
       {
-        wrapper.error(requestId, e.Err.Code, e.Err.Message + e.Text, "");
+        wrapper.error(requestId, Util.CurrentTimeMillis(), e.Err.Code, e.Err.Message + e.Text, "");
         return;
       }
 
       CloseAndSend(requestId, paramsList, lengthPos, EClientErrors.FAIL_SEND_REQACCOUNTUPDATESMULTI);
+    }
+
+    public void reqAccountUpdatesMultiProtoBuf(AccountUpdatesMultiRequest accountUpdatesMultiRequestProto)
+    {
+      if (accountUpdatesMultiRequestProto == null) return;
+      if (!CheckConnection()) return;
+
+      var paramsList = new BinaryWriter(new MemoryStream());
+      var lengthPos = prepareBuffer(paramsList);
+
+      int reqId = accountUpdatesMultiRequestProto.HasReqId ? accountUpdatesMultiRequestProto.ReqId : IncomingMessage.NotValid;
+
+      try
+      {
+        paramsList.AddParameter(OutgoingMessages.RequestAccountUpdatesMulti, serverVersion);
+        paramsList.AddParameter(accountUpdatesMultiRequestProto.ToByteArray());
+      }
+      catch (EClientException e)
+      {
+        wrapper.error(reqId, Util.CurrentTimeMillis(), e.Err.Code, e.Err.Message + e.Text, "");
+        return;
+      }
+
+      CloseAndSend(reqId, paramsList, lengthPos, EClientErrors.FAIL_SEND_REQACCOUNTUPDATESMULTI);
     }
 
     /**
@@ -2351,6 +3903,12 @@ namespace IBApi
      */
     public void cancelAccountUpdatesMulti(int requestId)
     {
+      if (useProtoBuf(serverVersion, OutgoingMessages.CancelAccountUpdatesMulti))
+      {
+        cancelAccountUpdatesMultiProtoBuf(EClientUtils.createCancelAccountUpdatesMultiRequestProto(requestId));
+        return;
+      }
+
       if (!CheckConnection()) return;
       if (!CheckServerVersion(MinServerVer.MODELS_SUPPORT, " It does not support account updates multi cancellation.")) return;
 
@@ -2358,10 +3916,34 @@ namespace IBApi
       var paramsList = new BinaryWriter(new MemoryStream());
       var lengthPos = prepareBuffer(paramsList);
 
-      paramsList.AddParameter(OutgoingMessages.CancelAccountUpdatesMulti);
+      paramsList.AddParameter(OutgoingMessages.CancelAccountUpdatesMulti, serverVersion);
       paramsList.AddParameter(VERSION);
       paramsList.AddParameter(requestId);
       CloseAndSend(requestId, paramsList, lengthPos, EClientErrors.FAIL_SEND_CANACCOUNTUPDATESMULTI);
+    }
+
+    public void cancelAccountUpdatesMultiProtoBuf(protobuf.CancelAccountUpdatesMulti cancelAccountUpdatesMultiProto)
+    {
+      if (cancelAccountUpdatesMultiProto == null) return;
+      if (!CheckConnection()) return;
+
+      var paramsList = new BinaryWriter(new MemoryStream());
+      var lengthPos = prepareBuffer(paramsList);
+
+      int reqId = cancelAccountUpdatesMultiProto.HasReqId ? cancelAccountUpdatesMultiProto.ReqId : IncomingMessage.NotValid;
+
+      try
+      {
+        paramsList.AddParameter(OutgoingMessages.CancelAccountUpdatesMulti, serverVersion);
+        paramsList.AddParameter(cancelAccountUpdatesMultiProto.ToByteArray());
+      }
+      catch (EClientException e)
+      {
+        wrapper.error(reqId, Util.CurrentTimeMillis(), e.Err.Code, e.Err.Message + e.Text, "");
+        return;
+      }
+
+      CloseAndSend(reqId, paramsList, lengthPos, EClientErrors.FAIL_SEND_CANACCOUNTUPDATESMULTI);
     }
 
     /**
@@ -2375,6 +3957,12 @@ namespace IBApi
      */
     public void reqSecDefOptParams(int reqId, string underlyingSymbol, string futFopExchange, string underlyingSecType, int underlyingConId)
     {
+      if (useProtoBuf(serverVersion, OutgoingMessages.RequestSecurityDefinitionOptionalParameters))
+      {
+        reqSecDefOptParamsProtoBuf(EClientUtils.createSecDefOptParamsRequestProto(reqId, underlyingSymbol, futFopExchange, underlyingSecType, underlyingConId));
+        return;
+      }
+
       if (!CheckConnection()) return;
       if (!CheckServerVersion(MinServerVer.SEC_DEF_OPT_PARAMS_REQ, " It does not support security definition option parameters.")) return;
 
@@ -2383,7 +3971,7 @@ namespace IBApi
 
       try
       {
-        paramsList.AddParameter(OutgoingMessages.RequestSecurityDefinitionOptionalParameters);
+        paramsList.AddParameter(OutgoingMessages.RequestSecurityDefinitionOptionalParameters, serverVersion);
         paramsList.AddParameter(reqId);
         paramsList.AddParameter(underlyingSymbol);
         paramsList.AddParameter(futFopExchange);
@@ -2392,7 +3980,31 @@ namespace IBApi
       }
       catch (EClientException e)
       {
-        wrapper.error(reqId, e.Err.Code, e.Err.Message + e.Text, "");
+        wrapper.error(reqId, Util.CurrentTimeMillis(), e.Err.Code, e.Err.Message + e.Text, "");
+        return;
+      }
+
+      CloseAndSend(reqId, paramsList, lengthPos, EClientErrors.FAIL_SEND_REQSECDEFOPTPARAMS);
+    }
+
+    public void reqSecDefOptParamsProtoBuf(protobuf.SecDefOptParamsRequest secDefOptParamsRequestProto)
+    {
+      if (secDefOptParamsRequestProto == null) return;
+      if (!CheckConnection()) return;
+
+      var paramsList = new BinaryWriter(new MemoryStream());
+      var lengthPos = prepareBuffer(paramsList);
+
+      int reqId = secDefOptParamsRequestProto.HasReqId ? secDefOptParamsRequestProto.ReqId : IncomingMessage.NotValid;
+
+      try
+      {
+        paramsList.AddParameter(OutgoingMessages.RequestSecurityDefinitionOptionalParameters, serverVersion);
+        paramsList.AddParameter(secDefOptParamsRequestProto.ToByteArray());
+      }
+      catch (EClientException e)
+      {
+        wrapper.error(reqId, Util.CurrentTimeMillis(), e.Err.Code, e.Err.Message + e.Text, "");
         return;
       }
 
@@ -2405,15 +4017,45 @@ namespace IBApi
      */
     public void reqSoftDollarTiers(int reqId)
     {
+      if (useProtoBuf(serverVersion, OutgoingMessages.RequestSoftDollarTiers))
+      {
+        reqSoftDollarTiersProtoBuf(EClientUtils.createSoftDollarTiersRequestProto(reqId));
+        return;
+      }
+
       if (!CheckConnection()) return;
       if (!CheckServerVersion(MinServerVer.SOFT_DOLLAR_TIER, " It does not support soft dollar tier.")) return;
 
       var paramsList = new BinaryWriter(new MemoryStream());
       var lengthPos = prepareBuffer(paramsList);
 
-      paramsList.AddParameter(OutgoingMessages.RequestSoftDollarTiers);
+      paramsList.AddParameter(OutgoingMessages.RequestSoftDollarTiers, serverVersion);
       paramsList.AddParameter(reqId);
       CloseAndSend(paramsList, lengthPos, EClientErrors.FAIL_SEND_REQSOFTDOLLARTIERS);
+    }
+
+    public void reqSoftDollarTiersProtoBuf(protobuf.SoftDollarTiersRequest softDollarTiersRequestProto)
+    {
+      if (softDollarTiersRequestProto == null) return;
+      if (!CheckConnection()) return;
+
+      var paramsList = new BinaryWriter(new MemoryStream());
+      var lengthPos = prepareBuffer(paramsList);
+
+      int reqId = softDollarTiersRequestProto.HasReqId ? softDollarTiersRequestProto.ReqId : IncomingMessage.NotValid;
+
+      try
+      {
+        paramsList.AddParameter(OutgoingMessages.RequestSoftDollarTiers, serverVersion);
+        paramsList.AddParameter(softDollarTiersRequestProto.ToByteArray());
+      }
+      catch (EClientException e)
+      {
+        wrapper.error(reqId, Util.CurrentTimeMillis(), e.Err.Code, e.Err.Message + e.Text, "");
+        return;
+      }
+
+      CloseAndSend(reqId, paramsList, lengthPos, EClientErrors.FAIL_SEND_REQSOFTDOLLARTIERS);
     }
 
     /**
@@ -2422,13 +4064,41 @@ namespace IBApi
      */
     public void reqFamilyCodes()
     {
+      if (useProtoBuf(serverVersion, OutgoingMessages.RequestFamilyCodes))
+      {
+        reqFamilyCodesProtoBuf(EClientUtils.createFamilyCodesRequestProto());
+        return;
+      }
+
       if (!CheckConnection()) return;
       if (!CheckServerVersion(MinServerVer.REQ_FAMILY_CODES, " It does not support family codes requests.")) return;
 
       var paramsList = new BinaryWriter(new MemoryStream());
       var lengthPos = prepareBuffer(paramsList);
 
-      paramsList.AddParameter(OutgoingMessages.RequestFamilyCodes);
+      paramsList.AddParameter(OutgoingMessages.RequestFamilyCodes, serverVersion);
+      CloseAndSend(paramsList, lengthPos, EClientErrors.FAIL_SEND_REQFAMILYCODES);
+    }
+
+    public void reqFamilyCodesProtoBuf(protobuf.FamilyCodesRequest familyCodesRequestProto)
+    {
+      if (familyCodesRequestProto == null) return;
+      if (!CheckConnection()) return;
+
+      var paramsList = new BinaryWriter(new MemoryStream());
+      var lengthPos = prepareBuffer(paramsList);
+
+      try
+      {
+        paramsList.AddParameter(OutgoingMessages.RequestFamilyCodes, serverVersion);
+        paramsList.AddParameter(familyCodesRequestProto.ToByteArray());
+      }
+      catch (EClientException e)
+      {
+        wrapper.error(IncomingMessage.NotValid, Util.CurrentTimeMillis(), e.Err.Code, e.Err.Message + e.Text, "");
+        return;
+      }
+
       CloseAndSend(paramsList, lengthPos, EClientErrors.FAIL_SEND_REQFAMILYCODES);
     }
 
@@ -2440,21 +4110,50 @@ namespace IBApi
      */
     public void reqMatchingSymbols(int reqId, string pattern)
     {
+      if (useProtoBuf(serverVersion, OutgoingMessages.RequestMatchingSymbols))
+      {
+        reqMatchingSymbolsProtoBuf(EClientUtils.createMatchingSymbolsRequestProto(reqId, pattern));
+        return;
+      }
+
       if (!CheckConnection()) return;
-      if (!CheckServerVersion(MinServerVer.REQ_MATCHING_SYMBOLS, " It does not support mathing symbols requests.")) return;
+      if (!CheckServerVersion(MinServerVer.REQ_MATCHING_SYMBOLS, " It does not support matching symbols requests.")) return;
 
       var paramsList = new BinaryWriter(new MemoryStream());
       var lengthPos = prepareBuffer(paramsList);
 
       try
       {
-        paramsList.AddParameter(OutgoingMessages.RequestMatchingSymbols);
+        paramsList.AddParameter(OutgoingMessages.RequestMatchingSymbols, serverVersion);
         paramsList.AddParameter(reqId);
         paramsList.AddParameter(pattern);
       }
       catch (EClientException e)
       {
-        wrapper.error(reqId, e.Err.Code, e.Err.Message + e.Text, "");
+        wrapper.error(reqId, Util.CurrentTimeMillis(), e.Err.Code, e.Err.Message + e.Text, "");
+        return;
+      }
+
+      CloseAndSend(reqId, paramsList, lengthPos, EClientErrors.FAIL_SEND_REQMATCHINGSYMBOLS);
+    }
+    public void reqMatchingSymbolsProtoBuf(protobuf.MatchingSymbolsRequest matchingSymbolsRequestProto)
+    {
+      if (matchingSymbolsRequestProto == null) return;
+      if (!CheckConnection()) return;
+
+      var paramsList = new BinaryWriter(new MemoryStream());
+      var lengthPos = prepareBuffer(paramsList);
+
+      int reqId = matchingSymbolsRequestProto.HasReqId ? matchingSymbolsRequestProto.ReqId : IncomingMessage.NotValid;
+
+      try
+      {
+        paramsList.AddParameter(OutgoingMessages.RequestMatchingSymbols, serverVersion);
+        paramsList.AddParameter(matchingSymbolsRequestProto.ToByteArray());
+      }
+      catch (EClientException e)
+      {
+        wrapper.error(reqId, Util.CurrentTimeMillis(), e.Err.Code, e.Err.Message + e.Text, "");
         return;
       }
 
@@ -2467,13 +4166,41 @@ namespace IBApi
      */
     public void reqMktDepthExchanges()
     {
+      if (useProtoBuf(serverVersion, OutgoingMessages.RequestMktDepthExchanges))
+      {
+        reqMarketDepthExchangesProtoBuf(EClientUtils.createMarketDepthExchangesRequestProto());
+        return;
+      }
+
       if (!CheckConnection()) return;
       if (!CheckServerVersion(MinServerVer.REQ_MKT_DEPTH_EXCHANGES, " It does not support market depth exchanges requests.")) return;
 
       var paramsList = new BinaryWriter(new MemoryStream());
       var lengthPos = prepareBuffer(paramsList);
 
-      paramsList.AddParameter(OutgoingMessages.RequestMktDepthExchanges);
+      paramsList.AddParameter(OutgoingMessages.RequestMktDepthExchanges, serverVersion);
+      CloseAndSend(paramsList, lengthPos, EClientErrors.FAIL_SEND_REQMKTDEPTHEXCHANGES);
+    }
+
+    public void reqMarketDepthExchangesProtoBuf(protobuf.MarketDepthExchangesRequest marketDepthExchangesRequestProto)
+    {
+      if (marketDepthExchangesRequestProto == null) return;
+      if (!CheckConnection()) return;
+
+      var paramsList = new BinaryWriter(new MemoryStream());
+      var lengthPos = prepareBuffer(paramsList);
+
+      try
+      {
+        paramsList.AddParameter(OutgoingMessages.RequestMktDepthExchanges, serverVersion);
+        paramsList.AddParameter(marketDepthExchangesRequestProto.ToByteArray());
+      }
+      catch (EClientException e)
+      {
+        wrapper.error(IncomingMessage.NotValid, Util.CurrentTimeMillis(), e.Err.Code, e.Err.Message + e.Text, "");
+        return;
+      }
+
       CloseAndSend(paramsList, lengthPos, EClientErrors.FAIL_SEND_REQMKTDEPTHEXCHANGES);
     }
 
@@ -2485,6 +4212,12 @@ namespace IBApi
      */
     public void reqSmartComponents(int reqId, string bboExchange)
     {
+      if (useProtoBuf(serverVersion, OutgoingMessages.RequestSmartComponents))
+      {
+        reqSmartComponentsProtoBuf(EClientUtils.createSmartComponentsRequestProto(reqId, bboExchange));
+        return;
+      }
+
       if (!CheckConnection()) return;
       if (!CheckServerVersion(MinServerVer.REQ_MKT_DEPTH_EXCHANGES, " It does not support smart components request.")) return;
 
@@ -2493,13 +4226,36 @@ namespace IBApi
 
       try
       {
-        paramsList.AddParameter(OutgoingMessages.RequestSmartComponents);
+        paramsList.AddParameter(OutgoingMessages.RequestSmartComponents, serverVersion);
         paramsList.AddParameter(reqId);
         paramsList.AddParameter(bboExchange);
       }
       catch (EClientException e)
       {
-        wrapper.error(reqId, e.Err.Code, e.Err.Message + e.Text, "");
+        wrapper.error(reqId, Util.CurrentTimeMillis(), e.Err.Code, e.Err.Message + e.Text, "");
+        return;
+      }
+
+      CloseAndSend(reqId, paramsList, lengthPos, EClientErrors.FAIL_SEND_REQSMARTCOMPONENTS);
+    }
+    public void reqSmartComponentsProtoBuf(protobuf.SmartComponentsRequest smartComponentsRequestProto)
+    {
+      if (smartComponentsRequestProto == null) return;
+      if (!CheckConnection()) return;
+
+      var paramsList = new BinaryWriter(new MemoryStream());
+      var lengthPos = prepareBuffer(paramsList);
+
+      int reqId = smartComponentsRequestProto.HasReqId ? smartComponentsRequestProto.ReqId : IncomingMessage.NotValid;
+
+      try
+      {
+        paramsList.AddParameter(OutgoingMessages.RequestSmartComponents, serverVersion);
+        paramsList.AddParameter(smartComponentsRequestProto.ToByteArray());
+      }
+      catch (EClientException e)
+      {
+        wrapper.error(reqId, Util.CurrentTimeMillis(), e.Err.Code, e.Err.Message + e.Text, "");
         return;
       }
 
@@ -2512,13 +4268,33 @@ namespace IBApi
      */
     public void reqNewsProviders()
     {
+      if (useProtoBuf(serverVersion, OutgoingMessages.RequestNewsProviders))
+      {
+        reqNewsProvidersProtoBuf(EClientUtils.createNewsProvidersRequestProto());
+        return;
+      }
+
       if (!CheckConnection()) return;
       if (!CheckServerVersion(MinServerVer.REQ_NEWS_PROVIDERS, " It does not support news providers requests.")) return;
 
       var paramsList = new BinaryWriter(new MemoryStream());
       var lengthPos = prepareBuffer(paramsList);
 
-      paramsList.AddParameter(OutgoingMessages.RequestNewsProviders);
+      paramsList.AddParameter(OutgoingMessages.RequestNewsProviders, serverVersion);
+      CloseAndSend(paramsList, lengthPos, EClientErrors.FAIL_SEND_REQNEWSPROVIDERS);
+    }
+
+    public void reqNewsProvidersProtoBuf(protobuf.NewsProvidersRequest newsProvidersRequestProto)
+    {
+      if (newsProvidersRequestProto == null) return;
+      if (!CheckConnection()) return;
+
+      var paramsList = new BinaryWriter(new MemoryStream());
+      var lengthPos = prepareBuffer(paramsList);
+
+      paramsList.AddParameter(OutgoingMessages.RequestNewsProviders, serverVersion);
+      paramsList.AddParameter(newsProvidersRequestProto.ToByteArray());
+
       CloseAndSend(paramsList, lengthPos, EClientErrors.FAIL_SEND_REQNEWSPROVIDERS);
     }
 
@@ -2532,6 +4308,12 @@ namespace IBApi
      */
     public void reqNewsArticle(int requestId, string providerCode, string articleId, List<TagValue> newsArticleOptions)
     {
+      if (useProtoBuf(serverVersion, OutgoingMessages.RequestNewsArticle))
+      {
+        reqNewsArticleProtoBuf(EClientUtils.createNewsArticleRequestProto(requestId, providerCode, articleId, newsArticleOptions));
+        return;
+      }
+
       if (!CheckConnection()) return;
       if (!CheckServerVersion(MinServerVer.REQ_NEWS_ARTICLE, " It does not support news article requests.")) return;
 
@@ -2540,7 +4322,7 @@ namespace IBApi
 
       try
       {
-        paramsList.AddParameter(OutgoingMessages.RequestNewsArticle);
+        paramsList.AddParameter(OutgoingMessages.RequestNewsArticle, serverVersion);
         paramsList.AddParameter(requestId);
         paramsList.AddParameter(providerCode);
         paramsList.AddParameter(articleId);
@@ -2548,7 +4330,31 @@ namespace IBApi
       }
       catch (EClientException e)
       {
-        wrapper.error(requestId, e.Err.Code, e.Err.Message + e.Text, "");
+        wrapper.error(requestId, Util.CurrentTimeMillis(), e.Err.Code, e.Err.Message + e.Text, "");
+        return;
+      }
+
+      CloseAndSend(requestId, paramsList, lengthPos, EClientErrors.FAIL_SEND_REQNEWSARTICLE);
+    }
+
+    public void reqNewsArticleProtoBuf(protobuf.NewsArticleRequest newsArticleRequestProto)
+    {
+      if (newsArticleRequestProto == null) return;
+      if (!CheckConnection()) return;
+
+      var paramsList = new BinaryWriter(new MemoryStream());
+      var lengthPos = prepareBuffer(paramsList);
+
+      int requestId = newsArticleRequestProto.HasReqId ? newsArticleRequestProto.ReqId : IncomingMessage.NotValid;
+
+      try
+      {
+        paramsList.AddParameter(OutgoingMessages.RequestNewsArticle, serverVersion);
+        paramsList.AddParameter(newsArticleRequestProto.ToByteArray());
+      }
+      catch (EClientException e)
+      {
+        wrapper.error(requestId, Util.CurrentTimeMillis(), e.Err.Code, e.Err.Message + e.Text, "");
         return;
       }
 
@@ -2568,6 +4374,12 @@ namespace IBApi
      */
     public void reqHistoricalNews(int requestId, int conId, string providerCodes, string startDateTime, string endDateTime, int totalResults, List<TagValue> historicalNewsOptions)
     {
+      if (useProtoBuf(serverVersion, OutgoingMessages.RequestHistoricalNews))
+      {
+        reqHistoricalNewsProtoBuf(EClientUtils.createHistoricalNewsRequestProto(requestId, conId, providerCodes, startDateTime, endDateTime, totalResults, historicalNewsOptions));
+        return;
+      }
+
       if (!CheckConnection()) return;
       if (!CheckServerVersion(MinServerVer.REQ_HISTORICAL_NEWS, " It does not support historical news requests.")) return;
 
@@ -2576,7 +4388,7 @@ namespace IBApi
 
       try
       {
-        paramsList.AddParameter(OutgoingMessages.RequestHistoricalNews);
+        paramsList.AddParameter(OutgoingMessages.RequestHistoricalNews, serverVersion);
         paramsList.AddParameter(requestId);
         paramsList.AddParameter(conId);
         paramsList.AddParameter(providerCodes);
@@ -2587,7 +4399,31 @@ namespace IBApi
       }
       catch (EClientException e)
       {
-        wrapper.error(requestId, e.Err.Code, e.Err.Message + e.Text, "");
+        wrapper.error(requestId, Util.CurrentTimeMillis(), e.Err.Code, e.Err.Message + e.Text, "");
+        return;
+      }
+
+      CloseAndSend(requestId, paramsList, lengthPos, EClientErrors.FAIL_SEND_REQHISTORICALNEWS);
+    }
+
+    public void reqHistoricalNewsProtoBuf(protobuf.HistoricalNewsRequest historicalNewsRequestProto)
+    {
+      if (historicalNewsRequestProto == null) return;
+      if (!CheckConnection()) return;
+
+      var paramsList = new BinaryWriter(new MemoryStream());
+      var lengthPos = prepareBuffer(paramsList);
+
+      int requestId = historicalNewsRequestProto.HasReqId ? historicalNewsRequestProto.ReqId : IncomingMessage.NotValid;
+
+      try
+      {
+        paramsList.AddParameter(OutgoingMessages.RequestHistoricalNews, serverVersion);
+        paramsList.AddParameter(historicalNewsRequestProto.ToByteArray());
+      }
+      catch (EClientException e)
+      {
+        wrapper.error(requestId, Util.CurrentTimeMillis(), e.Err.Code, e.Err.Message + e.Text, "");
         return;
       }
 
@@ -2605,6 +4441,12 @@ namespace IBApi
      */
     public void reqHeadTimestamp(int tickerId, Contract contract, string whatToShow, int useRTH, int formatDate)
     {
+      if (useProtoBuf(serverVersion, OutgoingMessages.RequestHeadTimestamp))
+      {
+        reqHeadTimestampProtoBuf(EClientUtils.createHeadTimestampRequestProto(tickerId, contract, whatToShow, useRTH != 0, formatDate));
+        return;
+      }
+
       if (!CheckConnection()) return;
       if (!CheckServerVersion(MinServerVer.REQ_HEAD_TIMESTAMP, " It does not support head time stamp requests.")) return;
 
@@ -2613,7 +4455,7 @@ namespace IBApi
 
       try
       {
-        paramsList.AddParameter(OutgoingMessages.RequestHeadTimestamp);
+        paramsList.AddParameter(OutgoingMessages.RequestHeadTimestamp, serverVersion);
         paramsList.AddParameter(tickerId);
         paramsList.AddParameter(contract);
         paramsList.AddParameter(useRTH);
@@ -2622,11 +4464,35 @@ namespace IBApi
       }
       catch (EClientException e)
       {
-        wrapper.error(tickerId, e.Err.Code, e.Err.Message + e.Text, "");
+        wrapper.error(tickerId, Util.CurrentTimeMillis(), e.Err.Code, e.Err.Message + e.Text, "");
         return;
       }
 
       CloseAndSend(tickerId, paramsList, lengthPos, EClientErrors.FAIL_SEND_REQHEADTIMESTAMP);
+    }
+
+    public void reqHeadTimestampProtoBuf(protobuf.HeadTimestampRequest headTimestampRequestProto)
+    {
+      if (headTimestampRequestProto == null) return;
+      if (!CheckConnection()) return;
+
+      var paramsList = new BinaryWriter(new MemoryStream());
+      var lengthPos = prepareBuffer(paramsList);
+
+      int reqId = headTimestampRequestProto.HasReqId ? headTimestampRequestProto.ReqId : IncomingMessage.NotValid;
+
+      try
+      {
+        paramsList.AddParameter(OutgoingMessages.RequestHeadTimestamp, serverVersion);
+        paramsList.AddParameter(headTimestampRequestProto.ToByteArray());
+      }
+      catch (EClientException e)
+      {
+        wrapper.error(reqId, Util.CurrentTimeMillis(), e.Err.Code, e.Err.Message + e.Text, "");
+        return;
+      }
+
+      CloseAndSend(reqId, paramsList, lengthPos, EClientErrors.FAIL_SEND_REQHEADTIMESTAMP);
     }
 
     /**
@@ -2635,17 +4501,46 @@ namespace IBApi
      */
     public void cancelHeadTimestamp(int tickerId)
     {
+      if (useProtoBuf(serverVersion, OutgoingMessages.CancelHeadTimestamp))
+      {
+        cancelHeadTimestampProtoBuf(EClientUtils.createCancelHeadTimestampProto(tickerId));
+        return;
+      }
+
       if (!CheckConnection()) return;
       if (!CheckServerVersion(MinServerVer.CANCEL_HEADTIMESTAMP, " It does not support head time stamp requests canceling.")) return;
 
       var paramsList = new BinaryWriter(new MemoryStream());
       var lengthPos = prepareBuffer(paramsList);
 
-      paramsList.AddParameter(OutgoingMessages.CancelHeadTimestamp);
+      paramsList.AddParameter(OutgoingMessages.CancelHeadTimestamp, serverVersion);
       paramsList.AddParameter(tickerId);
       CloseAndSend(paramsList, lengthPos, EClientErrors.FAIL_SEND_CANCELHEADTIMESTAMP);
     }
 
+    public void cancelHeadTimestampProtoBuf(protobuf.CancelHeadTimestamp cancelHeadTimestampProto)
+    {
+      if (cancelHeadTimestampProto == null) return;
+      if (!CheckConnection()) return;
+
+      var paramsList = new BinaryWriter(new MemoryStream());
+      var lengthPos = prepareBuffer(paramsList);
+
+      int reqId = cancelHeadTimestampProto.HasReqId ? cancelHeadTimestampProto.ReqId : IncomingMessage.NotValid;
+
+      try
+      {
+        paramsList.AddParameter(OutgoingMessages.CancelHeadTimestamp, serverVersion);
+        paramsList.AddParameter(cancelHeadTimestampProto.ToByteArray());
+      }
+      catch (EClientException e)
+      {
+        wrapper.error(reqId, Util.CurrentTimeMillis(), e.Err.Code, e.Err.Message + e.Text, "");
+        return;
+      }
+
+      CloseAndSend(reqId, paramsList, lengthPos, EClientErrors.FAIL_SEND_CANCELHEADTIMESTAMP);
+    }
 
     /**
      * @brief Returns data histogram of specified contract\n
@@ -2657,6 +4552,12 @@ namespace IBApi
      */
     public void reqHistogramData(int tickerId, Contract contract, bool useRTH, string period)
     {
+      if (useProtoBuf(serverVersion, OutgoingMessages.RequestHistogramData))
+      {
+        reqHistogramDataProtoBuf(EClientUtils.createHistogramDataRequestProto(tickerId, contract, useRTH, period));
+        return;
+      }
+
       if (!CheckConnection()) return;
       if (!CheckServerVersion(MinServerVer.REQ_HISTOGRAM_DATA, " It does not support histogram data requests.")) return;
 
@@ -2665,7 +4566,7 @@ namespace IBApi
 
       try
       {
-        paramsList.AddParameter(OutgoingMessages.RequestHistogramData);
+        paramsList.AddParameter(OutgoingMessages.RequestHistogramData, serverVersion);
         paramsList.AddParameter(tickerId);
         paramsList.AddParameter(contract);
         paramsList.AddParameter(useRTH);
@@ -2673,11 +4574,35 @@ namespace IBApi
       }
       catch (EClientException e)
       {
-        wrapper.error(tickerId, e.Err.Code, e.Err.Message + e.Text, "");
+        wrapper.error(tickerId, Util.CurrentTimeMillis(), e.Err.Code, e.Err.Message + e.Text, "");
         return;
       }
 
       CloseAndSend(tickerId, paramsList, lengthPos, EClientErrors.FAIL_SEND_REQHISTOGRAMDATA);
+    }
+
+    public void reqHistogramDataProtoBuf(protobuf.HistogramDataRequest histogramDataRequestProto)
+    {
+      if (histogramDataRequestProto == null) return;
+      if (!CheckConnection()) return;
+
+      var paramsList = new BinaryWriter(new MemoryStream());
+      var lengthPos = prepareBuffer(paramsList);
+
+      int reqId = histogramDataRequestProto.HasReqId ? histogramDataRequestProto.ReqId : IncomingMessage.NotValid;
+
+      try
+      {
+        paramsList.AddParameter(OutgoingMessages.RequestHistogramData, serverVersion);
+        paramsList.AddParameter(histogramDataRequestProto.ToByteArray());
+      }
+      catch (EClientException e)
+      {
+        wrapper.error(reqId, Util.CurrentTimeMillis(), e.Err.Code, e.Err.Message + e.Text, "");
+        return;
+      }
+
+      CloseAndSend(reqId, paramsList, lengthPos, EClientErrors.FAIL_SEND_REQHISTOGRAMDATA);
     }
 
     /**
@@ -2687,16 +4612,46 @@ namespace IBApi
      */
     public void cancelHistogramData(int tickerId)
     {
+      if (useProtoBuf(serverVersion, OutgoingMessages.CancelHistogramData))
+      {
+        cancelHistogramDataProtoBuf(EClientUtils.createCancelHistogramDataProto(tickerId));
+        return;
+      }
+
       if (!CheckConnection()) return;
       if (!CheckServerVersion(MinServerVer.REQ_HISTOGRAM_DATA, " It does not support histogram data requests.")) return;
 
       var paramsList = new BinaryWriter(new MemoryStream());
       var lengthPos = prepareBuffer(paramsList);
 
-      paramsList.AddParameter(OutgoingMessages.CancelHistogramData);
+      paramsList.AddParameter(OutgoingMessages.CancelHistogramData, serverVersion);
       paramsList.AddParameter(tickerId);
 
       CloseAndSend(paramsList, lengthPos, EClientErrors.FAIL_SEND_CANCELHISTOGRAMDATA);
+    }
+
+    public void cancelHistogramDataProtoBuf(protobuf.CancelHistogramData cancelHistogramDataProto)
+    {
+      if (cancelHistogramDataProto == null) return;
+      if (!CheckConnection()) return;
+
+      var paramsList = new BinaryWriter(new MemoryStream());
+      var lengthPos = prepareBuffer(paramsList);
+
+      int reqId = cancelHistogramDataProto.HasReqId ? cancelHistogramDataProto.ReqId : IncomingMessage.NotValid;
+
+      try
+      {
+        paramsList.AddParameter(OutgoingMessages.CancelHistogramData, serverVersion);
+        paramsList.AddParameter(cancelHistogramDataProto.ToByteArray());
+      }
+      catch (EClientException e)
+      {
+        wrapper.error(reqId, Util.CurrentTimeMillis(), e.Err.Code, e.Err.Message + e.Text, "");
+        return;
+      }
+
+      CloseAndSend(reqId, paramsList, lengthPos, EClientErrors.FAIL_SEND_CANCELHISTOGRAMDATA);
     }
 
     /**
@@ -2708,14 +4663,42 @@ namespace IBApi
      */
     public void reqMarketRule(int marketRuleId)
     {
+      if (useProtoBuf(serverVersion, OutgoingMessages.RequestMarketRule))
+      {
+        reqMarketRuleProtoBuf(EClientUtils.createMarketRuleRequestProto(marketRuleId));
+        return;
+      }
+
       if (!CheckConnection()) return;
       if (!CheckServerVersion(MinServerVer.MARKET_RULES, " It does not support market rule requests.")) return;
 
       var paramsList = new BinaryWriter(new MemoryStream());
       var lengthPos = prepareBuffer(paramsList);
 
-      paramsList.AddParameter(OutgoingMessages.RequestMarketRule);
+      paramsList.AddParameter(OutgoingMessages.RequestMarketRule, serverVersion);
       paramsList.AddParameter(marketRuleId);
+
+      CloseAndSend(paramsList, lengthPos, EClientErrors.FAIL_SEND_REQMARKETRULE);
+    }
+
+    public void reqMarketRuleProtoBuf(protobuf.MarketRuleRequest marketRuleRequestProto)
+    {
+      if (marketRuleRequestProto == null) return;
+      if (!CheckConnection()) return;
+
+      var paramsList = new BinaryWriter(new MemoryStream());
+      var lengthPos = prepareBuffer(paramsList);
+
+      try
+      {
+        paramsList.AddParameter(OutgoingMessages.RequestMarketRule, serverVersion);
+        paramsList.AddParameter(marketRuleRequestProto.ToByteArray());
+      }
+      catch (EClientException e)
+      {
+        wrapper.error(IncomingMessage.NotValid, Util.CurrentTimeMillis(), e.Err.Code, e.Err.Message + e.Text, "");
+        return;
+      }
 
       CloseAndSend(paramsList, lengthPos, EClientErrors.FAIL_SEND_REQMARKETRULE);
     }
@@ -2727,6 +4710,12 @@ namespace IBApi
      */
     public void reqPnL(int reqId, string account, string modelCode)
     {
+      if (useProtoBuf(serverVersion, OutgoingMessages.ReqPnL))
+      {
+        reqPnLProtoBuf(EClientUtils.createPnLRequestProto(reqId, account, modelCode));
+        return;
+      }
+
       if (!CheckConnection()) return;
       if (!CheckServerVersion(MinServerVer.PNL, "  It does not support PnL requests.")) return;
 
@@ -2735,14 +4724,38 @@ namespace IBApi
 
       try
       {
-        paramsList.AddParameter(OutgoingMessages.ReqPnL);
+        paramsList.AddParameter(OutgoingMessages.ReqPnL, serverVersion);
         paramsList.AddParameter(reqId);
         paramsList.AddParameter(account);
         paramsList.AddParameter(modelCode);
       }
       catch (EClientException e)
       {
-        wrapper.error(reqId, e.Err.Code, e.Err.Message + e.Text, "");
+        wrapper.error(reqId, Util.CurrentTimeMillis(), e.Err.Code, e.Err.Message + e.Text, "");
+        return;
+      }
+
+      CloseAndSend(reqId, paramsList, lengthPos, EClientErrors.FAIL_SEND_REQPNL);
+    }
+
+    public void reqPnLProtoBuf(protobuf.PnLRequest pnlRequestProto)
+    {
+      if (pnlRequestProto == null) return;
+      if (!CheckConnection()) return;
+
+      var paramsList = new BinaryWriter(new MemoryStream());
+      var lengthPos = prepareBuffer(paramsList);
+
+      int reqId = pnlRequestProto.HasReqId ? pnlRequestProto.ReqId : IncomingMessage.NotValid;
+
+      try
+      {
+        paramsList.AddParameter(OutgoingMessages.ReqPnL, serverVersion);
+        paramsList.AddParameter(pnlRequestProto.ToByteArray());
+      }
+      catch (EClientException e)
+      {
+        wrapper.error(reqId, Util.CurrentTimeMillis(), e.Err.Code, e.Err.Message + e.Text, "");
         return;
       }
 
@@ -2755,16 +4768,38 @@ namespace IBApi
      */
     public void cancelPnL(int reqId)
     {
+      if (useProtoBuf(serverVersion, OutgoingMessages.CancelPnL))
+      {
+        cancelPnLProtoBuf(EClientUtils.createCancelPnLProto(reqId));
+        return;
+      }
+
       if (!CheckConnection()) return;
       if (!CheckServerVersion(MinServerVer.PNL, "  It does not support PnL requests.")) return;
 
       var paramsList = new BinaryWriter(new MemoryStream());
       var lengthPos = prepareBuffer(paramsList);
 
-      paramsList.AddParameter(OutgoingMessages.CancelPnL);
+      paramsList.AddParameter(OutgoingMessages.CancelPnL, serverVersion);
       paramsList.AddParameter(reqId);
 
       CloseAndSend(paramsList, lengthPos, EClientErrors.FAIL_SEND_CANCELPNL);
+    }
+
+    public void cancelPnLProtoBuf(protobuf.CancelPnL cancelPnLProto)
+    {
+      if (cancelPnLProto == null) return;
+      if (!CheckConnection()) return;
+
+      var paramsList = new BinaryWriter(new MemoryStream());
+      var lengthPos = prepareBuffer(paramsList);
+
+      int reqId = cancelPnLProto.HasReqId ? cancelPnLProto.ReqId : IncomingMessage.NotValid;
+
+      paramsList.AddParameter(OutgoingMessages.CancelPnL, serverVersion);
+      paramsList.AddParameter(cancelPnLProto.ToByteArray());
+
+      CloseAndSend(reqId, paramsList, lengthPos, EClientErrors.FAIL_SEND_CANCELPNL);
     }
 
     /**
@@ -2777,6 +4812,12 @@ namespace IBApi
      */
     public void reqPnLSingle(int reqId, string account, string modelCode, int conId)
     {
+      if (useProtoBuf(serverVersion, OutgoingMessages.ReqPnLSingle))
+      {
+        reqPnLSingleProtoBuf(EClientUtils.createPnLSingleRequestProto(reqId, account, modelCode, conId));
+        return;
+      }
+
       if (!CheckConnection()) return;
       if (!CheckServerVersion(MinServerVer.PNL, "  It does not support PnL requests.")) return;
 
@@ -2785,7 +4826,7 @@ namespace IBApi
 
       try
       {
-        paramsList.AddParameter(OutgoingMessages.ReqPnLSingle);
+        paramsList.AddParameter(OutgoingMessages.ReqPnLSingle, serverVersion);
         paramsList.AddParameter(reqId);
         paramsList.AddParameter(account);
         paramsList.AddParameter(modelCode);
@@ -2793,7 +4834,31 @@ namespace IBApi
       }
       catch (EClientException e)
       {
-        wrapper.error(reqId, e.Err.Code, e.Err.Message + e.Text, "");
+        wrapper.error(reqId, Util.CurrentTimeMillis(), e.Err.Code, e.Err.Message + e.Text, "");
+        return;
+      }
+
+      CloseAndSend(reqId, paramsList, lengthPos, EClientErrors.FAIL_SEND_REQPNLSINGLE);
+    }
+
+    public void reqPnLSingleProtoBuf(protobuf.PnLSingleRequest pnlSingleRequestProto)
+    {
+      if (pnlSingleRequestProto == null) return;
+      if (!CheckConnection()) return;
+
+      var paramsList = new BinaryWriter(new MemoryStream());
+      var lengthPos = prepareBuffer(paramsList);
+
+      int reqId = pnlSingleRequestProto.HasReqId ? pnlSingleRequestProto.ReqId : IncomingMessage.NotValid;
+
+      try
+      {
+        paramsList.AddParameter(OutgoingMessages.ReqPnLSingle, serverVersion);
+        paramsList.AddParameter(pnlSingleRequestProto.ToByteArray());
+      }
+      catch (EClientException e)
+      {
+        wrapper.error(reqId, Util.CurrentTimeMillis(), e.Err.Code, e.Err.Message + e.Text, "");
         return;
       }
 
@@ -2806,16 +4871,38 @@ namespace IBApi
      */
     public void cancelPnLSingle(int reqId)
     {
+      if (useProtoBuf(serverVersion, OutgoingMessages.CancelPnLSingle))
+      {
+        cancelPnLSingleProtoBuf(EClientUtils.createCancelPnLSingleProto(reqId));
+        return;
+      }
+
       if (!CheckConnection()) return;
       if (!CheckServerVersion(MinServerVer.PNL, "  It does not support PnL requests.")) return;
 
       var paramsList = new BinaryWriter(new MemoryStream());
       var lengthPos = prepareBuffer(paramsList);
 
-      paramsList.AddParameter(OutgoingMessages.CancelPnLSingle);
+      paramsList.AddParameter(OutgoingMessages.CancelPnLSingle, serverVersion);
       paramsList.AddParameter(reqId);
 
-      CloseAndSend(paramsList, lengthPos, EClientErrors.FAIL_SEND_REQPNLSINGLE);
+      CloseAndSend(paramsList, lengthPos, EClientErrors.FAIL_SEND_CANCELPNLSINGLE);
+    }
+
+    public void cancelPnLSingleProtoBuf(protobuf.CancelPnLSingle cancelPnLSingleProto)
+    {
+      if (cancelPnLSingleProto == null) return;
+      if (!CheckConnection()) return;
+
+      var paramsList = new BinaryWriter(new MemoryStream());
+      var lengthPos = prepareBuffer(paramsList);
+
+      int reqId = cancelPnLSingleProto.HasReqId ? cancelPnLSingleProto.ReqId : IncomingMessage.NotValid;
+
+      paramsList.AddParameter(OutgoingMessages.CancelPnLSingle, serverVersion);
+      paramsList.AddParameter(cancelPnLSingleProto.ToByteArray());
+
+      CloseAndSend(reqId, paramsList, lengthPos, EClientErrors.FAIL_SEND_CANCELPNLSINGLE);
     }
 
     /**
@@ -2834,6 +4921,12 @@ namespace IBApi
                                    string endDateTime, int numberOfTicks, string whatToShow, int useRth, bool ignoreSize,
                                    List<TagValue> miscOptions)
     {
+      if (useProtoBuf(serverVersion, OutgoingMessages.ReqHistoricalTicks))
+      {
+        reqHistoricalTicksProtoBuf(EClientUtils.createHistoricalTicksRequestProto(reqId, contract, startDateTime, endDateTime, numberOfTicks, whatToShow, useRth != 0, ignoreSize, miscOptions));
+        return;
+      }
+
       if (!CheckConnection()) return;
       if (!CheckServerVersion(MinServerVer.HISTORICAL_TICKS, "  It does not support historical ticks request.")) return;
 
@@ -2842,7 +4935,7 @@ namespace IBApi
 
       try
       {
-        paramsList.AddParameter(OutgoingMessages.ReqHistoricalTicks);
+        paramsList.AddParameter(OutgoingMessages.ReqHistoricalTicks, serverVersion);
         paramsList.AddParameter(reqId);
         paramsList.AddParameter(contract);
         paramsList.AddParameter(startDateTime);
@@ -2855,7 +4948,31 @@ namespace IBApi
       }
       catch (EClientException e)
       {
-        wrapper.error(reqId, e.Err.Code, e.Err.Message + e.Text, "");
+        wrapper.error(reqId, Util.CurrentTimeMillis(), e.Err.Code, e.Err.Message + e.Text, "");
+        return;
+      }
+
+      CloseAndSend(reqId, paramsList, lengthPos, EClientErrors.FAIL_SEND_REQHISTORICALTICKS);
+    }
+
+    public void reqHistoricalTicksProtoBuf(protobuf.HistoricalTicksRequest historicalTicksRequestProto)
+    {
+      if (historicalTicksRequestProto == null) return;
+      if (!CheckConnection()) return;
+
+      var paramsList = new BinaryWriter(new MemoryStream());
+      var lengthPos = prepareBuffer(paramsList);
+
+      int reqId = historicalTicksRequestProto.HasReqId ? historicalTicksRequestProto.ReqId : IncomingMessage.NotValid;
+
+      try
+      {
+        paramsList.AddParameter(OutgoingMessages.ReqHistoricalTicks, serverVersion);
+        paramsList.AddParameter(historicalTicksRequestProto.ToByteArray());
+      }
+      catch (EClientException e)
+      {
+        wrapper.error(reqId, Util.CurrentTimeMillis(), e.Err.Code, e.Err.Message + e.Text, "");
         return;
       }
 
@@ -2868,6 +4985,12 @@ namespace IBApi
      */
     public void reqWshMetaData(int reqId)
     {
+      if (useProtoBuf(serverVersion, OutgoingMessages.ReqWshMetaData))
+      {
+        reqWshMetaDataProtoBuf(EClientUtils.createWshMetaDataRequestProto(reqId));
+        return;
+      }
+
       if (!CheckConnection()) return;
       if (!CheckServerVersion(MinServerVer.WSHE_CALENDAR, "  It does not support WSHE Calendar API.")) return;
 
@@ -2876,12 +4999,36 @@ namespace IBApi
 
       try
       {
-        paramsList.AddParameter(OutgoingMessages.ReqWshMetaData);
+        paramsList.AddParameter(OutgoingMessages.ReqWshMetaData, serverVersion);
         paramsList.AddParameter(reqId);
       }
       catch (EClientException e)
       {
-        wrapper.error(reqId, e.Err.Code, e.Err.Message + e.Text, "");
+        wrapper.error(reqId, Util.CurrentTimeMillis(), e.Err.Code, e.Err.Message + e.Text, "");
+        return;
+      }
+
+      CloseAndSend(reqId, paramsList, lengthPos, EClientErrors.FAIL_SEND_REQ_WSH_META_DATA);
+    }
+
+    public void reqWshMetaDataProtoBuf(protobuf.WshMetaDataRequest wshMetaDataRequestProto)
+    {
+      if (wshMetaDataRequestProto == null) return;
+      if (!CheckConnection()) return;
+
+      var paramsList = new BinaryWriter(new MemoryStream());
+      var lengthPos = prepareBuffer(paramsList);
+
+      int reqId = wshMetaDataRequestProto.HasReqId ? wshMetaDataRequestProto.ReqId : IncomingMessage.NotValid;
+
+      try
+      {
+        paramsList.AddParameter(OutgoingMessages.ReqWshMetaData, serverVersion);
+        paramsList.AddParameter(wshMetaDataRequestProto.ToByteArray());
+      }
+      catch (EClientException e)
+      {
+        wrapper.error(reqId, Util.CurrentTimeMillis(), e.Err.Code, e.Err.Message + e.Text, "");
         return;
       }
 
@@ -2894,16 +5041,38 @@ namespace IBApi
      */
     public void cancelWshMetaData(int reqId)
     {
+      if (useProtoBuf(serverVersion, OutgoingMessages.CancelWshMetaData))
+      {
+        cancelWshMetaDataProtoBuf(EClientUtils.createCancelWshMetaDataProto(reqId));
+        return;
+      }
+
       if (!CheckConnection()) return;
       if (!CheckServerVersion(MinServerVer.WSHE_CALENDAR, "  It does not support WSHE Calendar API.")) return;
 
       var paramsList = new BinaryWriter(new MemoryStream());
       var lengthPos = prepareBuffer(paramsList);
 
-      paramsList.AddParameter(OutgoingMessages.CancelWshMetaData);
+      paramsList.AddParameter(OutgoingMessages.CancelWshMetaData, serverVersion);
       paramsList.AddParameter(reqId);
 
       CloseAndSend(paramsList, lengthPos, EClientErrors.FAIL_SEND_CAN_WSH_META_DATA);
+    }
+
+    public void cancelWshMetaDataProtoBuf(protobuf.CancelWshMetaData cancelWshMetaDataProto)
+    {
+      if (cancelWshMetaDataProto == null) return;
+      if (!CheckConnection()) return;
+
+      var paramsList = new BinaryWriter(new MemoryStream());
+      var lengthPos = prepareBuffer(paramsList);
+
+      int reqId = cancelWshMetaDataProto.HasReqId ? cancelWshMetaDataProto.ReqId : IncomingMessage.NotValid;
+
+      paramsList.AddParameter(OutgoingMessages.CancelWshMetaData, serverVersion);
+      paramsList.AddParameter(cancelWshMetaDataProto.ToByteArray());
+
+      CloseAndSend(reqId, paramsList, lengthPos, EClientErrors.FAIL_SEND_CAN_WSH_META_DATA);
     }
 
     /**
@@ -2913,6 +5082,12 @@ namespace IBApi
      */
     public void reqWshEventData(int reqId, WshEventData wshEventData)
     {
+      if (useProtoBuf(serverVersion, OutgoingMessages.ReqWshEventData))
+      {
+        reqWshEventDataProtoBuf(EClientUtils.createWshEventDataRequestProto(reqId, wshEventData));
+        return;
+      }
+
       if (!CheckConnection()) return;
       if (!CheckServerVersion(MinServerVer.WSHE_CALENDAR, "  It does not support WSHE Calendar API.")) return;
 
@@ -2920,7 +5095,7 @@ namespace IBApi
       {
         if (!IsEmpty(wshEventData.Filter) || wshEventData.FillWatchlist || wshEventData.FillPortfolio || wshEventData.FillCompetitors)
         {
-          ReportError(reqId, EClientErrors.UPDATE_TWS, "  It does not support WSH event data filters.");
+          ReportError(reqId, Util.CurrentTimeMillis(), EClientErrors.UPDATE_TWS, "  It does not support WSH event data filters.");
           return;
         }
       }
@@ -2929,7 +5104,7 @@ namespace IBApi
       {
         if (!IsEmpty(wshEventData.StartDate) || !IsEmpty(wshEventData.EndDate) || wshEventData.TotalLimit != int.MaxValue)
         {
-          ReportError(reqId, EClientErrors.UPDATE_TWS, "  It does not support WSH event data date filters.");
+          ReportError(reqId, Util.CurrentTimeMillis(), EClientErrors.UPDATE_TWS, "  It does not support WSH event data date filters.");
           return;
         }
       }
@@ -2939,7 +5114,7 @@ namespace IBApi
 
       try
       {
-        paramsList.AddParameter(OutgoingMessages.ReqWshEventData);
+        paramsList.AddParameter(OutgoingMessages.ReqWshEventData, serverVersion);
         paramsList.AddParameter(reqId);
         paramsList.AddParameter(wshEventData.ConId);
 
@@ -2960,7 +5135,31 @@ namespace IBApi
       }
       catch (EClientException e)
       {
-        wrapper.error(reqId, e.Err.Code, e.Err.Message + e.Text, "");
+        wrapper.error(reqId, Util.CurrentTimeMillis(), e.Err.Code, e.Err.Message + e.Text, "");
+        return;
+      }
+
+      CloseAndSend(reqId, paramsList, lengthPos, EClientErrors.FAIL_SEND_REQ_WSH_EVENT_DATA);
+    }
+
+    public void reqWshEventDataProtoBuf(protobuf.WshEventDataRequest wshEventDataRequestProto)
+    {
+      if (wshEventDataRequestProto == null) return;
+      if (!CheckConnection()) return;
+
+      var paramsList = new BinaryWriter(new MemoryStream());
+      var lengthPos = prepareBuffer(paramsList);
+
+      int reqId = wshEventDataRequestProto.HasReqId ? wshEventDataRequestProto.ReqId : IncomingMessage.NotValid;
+
+      try
+      {
+        paramsList.AddParameter(OutgoingMessages.ReqWshEventData, serverVersion);
+        paramsList.AddParameter(wshEventDataRequestProto.ToByteArray());
+      }
+      catch (EClientException e)
+      {
+        wrapper.error(reqId, Util.CurrentTimeMillis(), e.Err.Code, e.Err.Message + e.Text, "");
         return;
       }
 
@@ -2973,16 +5172,38 @@ namespace IBApi
      */
     public void cancelWshEventData(int reqId)
     {
+      if (useProtoBuf(serverVersion, OutgoingMessages.CancelWshEventData))
+      {
+        cancelWshEventDataProtoBuf(EClientUtils.createCancelWshEventDataProto(reqId));
+        return;
+      }
+
       if (!CheckConnection()) return;
       if (!CheckServerVersion(MinServerVer.WSHE_CALENDAR, "  It does not support WSHE Calendar API.")) return;
 
       var paramsList = new BinaryWriter(new MemoryStream());
       var lengthPos = prepareBuffer(paramsList);
 
-      paramsList.AddParameter(OutgoingMessages.CancelWshEventData);
+      paramsList.AddParameter(OutgoingMessages.CancelWshEventData, serverVersion);
       paramsList.AddParameter(reqId);
 
       CloseAndSend(paramsList, lengthPos, EClientErrors.FAIL_SEND_CAN_WSH_EVENT_DATA);
+    }
+
+    public void cancelWshEventDataProtoBuf(protobuf.CancelWshEventData cancelWshEventDataProto)
+    {
+      if (cancelWshEventDataProto == null) return;
+      if (!CheckConnection()) return;
+
+      var paramsList = new BinaryWriter(new MemoryStream());
+      var lengthPos = prepareBuffer(paramsList);
+
+      int reqId = cancelWshEventDataProto.HasReqId ? cancelWshEventDataProto.ReqId : IncomingMessage.NotValid;
+
+      paramsList.AddParameter(OutgoingMessages.CancelWshEventData, serverVersion);
+      paramsList.AddParameter(cancelWshEventDataProto.ToByteArray());
+
+      CloseAndSend(reqId, paramsList, lengthPos, EClientErrors.FAIL_SEND_CAN_WSH_EVENT_DATA);
     }
 
     /**
@@ -2991,6 +5212,12 @@ namespace IBApi
      */
     public void reqUserInfo(int reqId)
     {
+      if (useProtoBuf(serverVersion, OutgoingMessages.ReqUserInfo))
+      {
+        reqUserInfoProtoBuf(EClientUtils.createUserInfoRequestProto(reqId));
+        return;
+      }
+
       if (!CheckConnection()) return;
       if (!CheckServerVersion(MinServerVer.USER_INFO, " It does not support user info requests.")) return;
 
@@ -2999,17 +5226,148 @@ namespace IBApi
 
       try
       {
-        paramsList.AddParameter(OutgoingMessages.ReqUserInfo);
+        paramsList.AddParameter(OutgoingMessages.ReqUserInfo, serverVersion);
         paramsList.AddParameter(reqId);
       }
       catch (EClientException e)
       {
-        wrapper.error(reqId, e.Err.Code, e.Err.Message + e.Text, "");
+        wrapper.error(reqId, Util.CurrentTimeMillis(), e.Err.Code, e.Err.Message + e.Text, "");
         return;
       }
 
       CloseAndSend(reqId, paramsList, lengthPos, EClientErrors.FAIL_SEND_REQ_USER_INFO);
     }
+
+    public void reqUserInfoProtoBuf(protobuf.UserInfoRequest userInfoRequestProto)
+    {
+      if (userInfoRequestProto == null) return;
+      if (!CheckConnection()) return;
+
+      var paramsList = new BinaryWriter(new MemoryStream());
+      var lengthPos = prepareBuffer(paramsList);
+
+      int reqId = userInfoRequestProto.HasReqId ? userInfoRequestProto.ReqId : IncomingMessage.NotValid;
+
+      try
+      {
+        paramsList.AddParameter(OutgoingMessages.ReqUserInfo, serverVersion);
+        paramsList.AddParameter(userInfoRequestProto.ToByteArray());
+      }
+      catch (EClientException e)
+      {
+        wrapper.error(reqId, Util.CurrentTimeMillis(), e.Err.Code, e.Err.Message + e.Text, "");
+        return;
+      }
+
+      CloseAndSend(reqId, paramsList, lengthPos, EClientErrors.FAIL_SEND_REQ_USER_INFO);
+    }
+
+    /**
+     * @brief Requests TWS's current time in milliseconds.
+     * @sa EWrapper::currentTimeInMillis
+     */
+    public void reqCurrentTimeInMillis()
+    {
+      if (useProtoBuf(serverVersion, OutgoingMessages.RequestCurrentTimeInMillis))
+      {
+        reqCurrentTimeInMillisProtoBuf(EClientUtils.createCurrentTimeInMillisRequestProto());
+        return;
+      }
+
+      if (!CheckConnection()) return;
+      if (!CheckServerVersion(MinServerVer.MIN_SERVER_VER_CURRENT_TIME_IN_MILLIS, " It does not support current time in millis requests.")) return;
+
+      var paramsList = new BinaryWriter(new MemoryStream());
+      var lengthPos = prepareBuffer(paramsList);
+
+      paramsList.AddParameter(OutgoingMessages.RequestCurrentTimeInMillis, serverVersion);
+      CloseAndSend(paramsList, lengthPos, EClientErrors.FAIL_SEND_REQCURRTIMEINMILLIS);
+    }
+
+    public void reqCurrentTimeInMillisProtoBuf(protobuf.CurrentTimeInMillisRequest currentTimeInMillisRequestProto)
+    {
+      if (currentTimeInMillisRequestProto == null) return;
+      if (!CheckConnection()) return;
+
+      var paramsList = new BinaryWriter(new MemoryStream());
+      var lengthPos = prepareBuffer(paramsList);
+
+      try
+      {
+        paramsList.AddParameter(OutgoingMessages.RequestCurrentTimeInMillis, serverVersion);
+        paramsList.AddParameter(currentTimeInMillisRequestProto.ToByteArray());
+      }
+      catch (EClientException e)
+      {
+        wrapper.error(IncomingMessage.NotValid, Util.CurrentTimeMillis(), e.Err.Code, e.Err.Message + e.Text, "");
+        return;
+      }
+
+      CloseAndSend(paramsList, lengthPos, EClientErrors.FAIL_SEND_REQCURRTIMEINMILLIS);
+    }
+
+    public void cancelContractData(int reqId)
+    {
+      cancelContractDataProtoBuf(EClientUtils.createCancelContractDataProto(reqId));
+    }
+
+    public void cancelContractDataProtoBuf(protobuf.CancelContractData cancelContractDataProto)
+    {
+      if (cancelContractDataProto == null) return;
+      if (!CheckConnection()) return;
+
+      var paramsList = new BinaryWriter(new MemoryStream());
+      var lengthPos = prepareBuffer(paramsList);
+
+      int reqId = cancelContractDataProto.HasReqId ? cancelContractDataProto.ReqId : IncomingMessage.NotValid;
+
+      if (!CheckServerVersion(reqId, MinServerVer.MIN_SERVER_VER_CANCEL_CONTRACT_DATA, " It does not support contract data cancels.")) return;
+
+      try
+      {
+        paramsList.AddParameter(OutgoingMessages.CancelContractData, serverVersion);
+        paramsList.AddParameter(cancelContractDataProto.ToByteArray());
+      }
+      catch (EClientException e)
+      {
+        wrapper.error(reqId, Util.CurrentTimeMillis(), e.Err.Code, e.Err.Message + e.Text, "");
+        return;
+      }
+
+      CloseAndSend(reqId, paramsList, lengthPos, EClientErrors.FAIL_SEND_CANCEL_CONTRACT_DATA);
+    }
+
+    public void cancelHistoricalTicks(int reqId)
+    {
+      cancelHistoricalTicksProtoBuf(EClientUtils.createCancelHistoricalTicksProto(reqId));
+    }
+
+    public void cancelHistoricalTicksProtoBuf(protobuf.CancelHistoricalTicks cancelHistoricalTicksProto)
+    {
+      if (cancelHistoricalTicksProto == null) return;
+      if (!CheckConnection()) return;
+
+      var paramsList = new BinaryWriter(new MemoryStream());
+      var lengthPos = prepareBuffer(paramsList);
+
+      int reqId = cancelHistoricalTicksProto.HasReqId ? cancelHistoricalTicksProto.ReqId : IncomingMessage.NotValid;
+
+      if (!CheckServerVersion(reqId, MinServerVer.MIN_SERVER_VER_CANCEL_CONTRACT_DATA, " It does not support historical ticks cancels.")) return;
+
+      try
+      {
+        paramsList.AddParameter(OutgoingMessages.CancelHistoricalTicks, serverVersion);
+        paramsList.AddParameter(cancelHistoricalTicksProto.ToByteArray());
+      }
+      catch (EClientException e)
+      {
+        wrapper.error(reqId, Util.CurrentTimeMillis(), e.Err.Code, e.Err.Message + e.Text, "");
+        return;
+      }
+
+      CloseAndSend(reqId, paramsList, lengthPos, EClientErrors.FAIL_SEND_CANCEL_HISTORICAL_TICKS);
+    }
+
 
     protected bool CheckServerVersion(int requiredVersion) => CheckServerVersion(requiredVersion, "");
 
@@ -3024,10 +5382,7 @@ namespace IBApi
       return false;
     }
 
-    protected void CloseAndSend(BinaryWriter paramsList, uint lengthPos, CodeMsgPair error)
-    {
-      CloseAndSend(IncomingMessage.NotValid, paramsList, lengthPos, error);
-    }
+    protected void CloseAndSend(BinaryWriter paramsList, uint lengthPos, CodeMsgPair error) => CloseAndSend(IncomingMessage.NotValid, paramsList, lengthPos, error);
 
     protected void CloseAndSend(int reqId, BinaryWriter paramsList, uint lengthPos, CodeMsgPair error)
     {
@@ -3037,7 +5392,7 @@ namespace IBApi
       }
       catch (Exception)
       {
-        wrapper.error(reqId, error.Code, error.Message, "");
+        wrapper.error(reqId, Util.CurrentTimeMillis(), error.Code, error.Message, "");
         Close();
       }
     }
@@ -3047,32 +5402,32 @@ namespace IBApi
     protected bool CheckConnection()
     {
       if (isConnected) return true;
-      wrapper.error(IncomingMessage.NotValid, EClientErrors.NOT_CONNECTED.Code, EClientErrors.NOT_CONNECTED.Message, "");
+      wrapper.error(IncomingMessage.NotValid, Util.CurrentTimeMillis(), EClientErrors.NOT_CONNECTED.Code, EClientErrors.NOT_CONNECTED.Message, "");
       return false;
     }
 
-    protected void ReportError(int reqId, CodeMsgPair error, string tail) => ReportError(reqId, error.Code, error.Message + tail);
+    protected void ReportError(int reqId, long errorTime, CodeMsgPair error, string tail) => ReportError(reqId, errorTime, error.Code, error.Message + tail);
 
-    protected void ReportUpdateTWS(int reqId, string tail) => ReportError(reqId, EClientErrors.UPDATE_TWS.Code, EClientErrors.UPDATE_TWS.Message + tail);
+    protected void ReportUpdateTWS(int reqId, long errorTime, string tail) => ReportError(reqId, errorTime, EClientErrors.UPDATE_TWS.Code, EClientErrors.UPDATE_TWS.Message + tail);
 
-    protected void ReportUpdateTWS(string tail) => ReportError(IncomingMessage.NotValid, EClientErrors.UPDATE_TWS.Code, EClientErrors.UPDATE_TWS.Message + tail);
+    protected void ReportUpdateTWS(long errorTime, string tail) => ReportError(IncomingMessage.NotValid, errorTime, EClientErrors.UPDATE_TWS.Code, EClientErrors.UPDATE_TWS.Message + tail);
 
-    protected void ReportError(int reqId, int code, string message) => wrapper.error(reqId, code, message, "");
+    protected void ReportError(int reqId, long errorTime, int code, string message) => wrapper.error(reqId, errorTime, code, message, "");
 
-    protected void SendCancelRequest(OutgoingMessages msgType, int version, int reqId, CodeMsgPair errorMessage)
+    protected void SendCancelRequest(OutgoingMessages msgType, int version, int reqId, CodeMsgPair errorMessage, int serverVersion)
     {
       var paramsList = new BinaryWriter(new MemoryStream());
       var lengthPos = prepareBuffer(paramsList);
 
       try
       {
-        paramsList.AddParameter(msgType);
+        paramsList.AddParameter(msgType, serverVersion);
         paramsList.AddParameter(version);
         paramsList.AddParameter(reqId);
       }
       catch (EClientException e)
       {
-        wrapper.error(reqId, e.Err.Code, e.Err.Message + e.Text, "");
+        wrapper.error(reqId, Util.CurrentTimeMillis(), e.Err.Code, e.Err.Message + e.Text, "");
         return;
       }
 
@@ -3082,24 +5437,24 @@ namespace IBApi
       }
       catch (Exception)
       {
-        wrapper.error(reqId, errorMessage.Code, errorMessage.Message, "");
+        wrapper.error(reqId, Util.CurrentTimeMillis(), errorMessage.Code, errorMessage.Message, "");
         Close();
       }
     }
 
-    protected void SendCancelRequest(OutgoingMessages msgType, int version, CodeMsgPair errorMessage)
+    protected void SendCancelRequest(OutgoingMessages msgType, int version, CodeMsgPair errorMessage, int serverVersion)
     {
       var paramsList = new BinaryWriter(new MemoryStream());
       var lengthPos = prepareBuffer(paramsList);
 
       try
       {
-        paramsList.AddParameter(msgType);
+        paramsList.AddParameter(msgType, serverVersion);
         paramsList.AddParameter(version);
       }
       catch (EClientException e)
       {
-        wrapper.error(IncomingMessage.NotValid, e.Err.Code, e.Err.Message + e.Text, "");
+        wrapper.error(IncomingMessage.NotValid, Util.CurrentTimeMillis(), e.Err.Code, e.Err.Message + e.Text, "");
         return;
       }
 
@@ -3109,7 +5464,7 @@ namespace IBApi
       }
       catch (Exception)
       {
-        wrapper.error(IncomingMessage.NotValid, errorMessage.Code, errorMessage.Message, "");
+        wrapper.error(IncomingMessage.NotValid, Util.CurrentTimeMillis(), errorMessage.Code, errorMessage.Message, "");
         Close();
       }
     }
@@ -3125,7 +5480,7 @@ namespace IBApi
           {
             comboLeg = contract.ComboLegs[i];
             if (comboLeg.ShortSaleSlot == 0 && IsEmpty(comboLeg.DesignatedLocation)) continue;
-            ReportError(id, EClientErrors.UPDATE_TWS, "  It does not support SSHORT flag for combo legs.");
+            ReportError(id, Util.CurrentTimeMillis(), EClientErrors.UPDATE_TWS, "  It does not support SSHORT flag for combo legs.");
             return false;
           }
         }
@@ -3133,19 +5488,19 @@ namespace IBApi
 
       if (serverVersion < MinServerVer.DELTA_NEUTRAL && contract.DeltaNeutralContract != null)
       {
-        ReportError(id, EClientErrors.UPDATE_TWS, "  It does not support delta-neutral orders.");
+        ReportError(id, Util.CurrentTimeMillis(), EClientErrors.UPDATE_TWS, "  It does not support delta-neutral orders.");
         return false;
       }
 
       if (serverVersion < MinServerVer.PLACE_ORDER_CONID && contract.ConId > 0)
       {
-        ReportError(id, EClientErrors.UPDATE_TWS, "  It does not support conId parameter.");
+        ReportError(id, Util.CurrentTimeMillis(), EClientErrors.UPDATE_TWS, "  It does not support conId parameter.");
         return false;
       }
 
       if (serverVersion < MinServerVer.SEC_ID_TYPE && (!IsEmpty(contract.SecIdType) || !IsEmpty(contract.SecId)))
       {
-        ReportError(id, EClientErrors.UPDATE_TWS, "  It does not support secIdType and secId parameters.");
+        ReportError(id, Util.CurrentTimeMillis(), EClientErrors.UPDATE_TWS, "  It does not support secIdType and secId parameters.");
         return false;
       }
       if (serverVersion < MinServerVer.SSHORTX && contract.ComboLegs.Count > 0)
@@ -3155,13 +5510,13 @@ namespace IBApi
         {
           comboLeg = contract.ComboLegs[i];
           if (comboLeg.ExemptCode == -1) continue;
-          ReportError(id, EClientErrors.UPDATE_TWS, "  It does not support exemptCode parameter.");
+          ReportError(id, Util.CurrentTimeMillis(), EClientErrors.UPDATE_TWS, "  It does not support exemptCode parameter.");
           return false;
         }
       }
       if (serverVersion < MinServerVer.TRADING_CLASS && !IsEmpty(contract.TradingClass))
       {
-        ReportError(id, EClientErrors.UPDATE_TWS, "  It does not support tradingClass parameters in placeOrder.");
+        ReportError(id, Util.CurrentTimeMillis(), EClientErrors.UPDATE_TWS, "  It does not support tradingClass parameters in placeOrder.");
         return false;
       }
       return true;
@@ -3171,48 +5526,48 @@ namespace IBApi
     {
       if (serverVersion < MinServerVer.SCALE_ORDERS && (order.ScaleInitLevelSize != int.MaxValue || order.ScalePriceIncrement != double.MaxValue))
       {
-        ReportError(id, EClientErrors.UPDATE_TWS, "  It does not support Scale orders.");
+        ReportError(id, Util.CurrentTimeMillis(), EClientErrors.UPDATE_TWS, "  It does not support Scale orders.");
         return false;
       }
       if (serverVersion < MinServerVer.WHAT_IF_ORDERS && order.WhatIf)
       {
-        ReportError(id, EClientErrors.UPDATE_TWS, "  It does not support what-if orders.");
+        ReportError(id, Util.CurrentTimeMillis(), EClientErrors.UPDATE_TWS, "  It does not support what-if orders.");
         return false;
       }
 
       if (serverVersion < MinServerVer.SCALE_ORDERS2 && order.ScaleSubsLevelSize != int.MaxValue)
       {
-        ReportError(id, EClientErrors.UPDATE_TWS, "  It does not support Subsequent Level Size for Scale orders.");
+        ReportError(id, Util.CurrentTimeMillis(), EClientErrors.UPDATE_TWS, "  It does not support Subsequent Level Size for Scale orders.");
         return false;
       }
 
       if (serverVersion < MinServerVer.ALGO_ORDERS && !IsEmpty(order.AlgoStrategy))
       {
-        ReportError(id, EClientErrors.UPDATE_TWS, "  It does not support algo orders.");
+        ReportError(id, Util.CurrentTimeMillis(), EClientErrors.UPDATE_TWS, "  It does not support algo orders.");
         return false;
       }
 
       if (serverVersion < MinServerVer.NOT_HELD && order.NotHeld)
       {
-        ReportError(id, EClientErrors.UPDATE_TWS, "  It does not support notHeld parameter.");
+        ReportError(id, Util.CurrentTimeMillis(), EClientErrors.UPDATE_TWS, "  It does not support notHeld parameter.");
         return false;
       }
 
       if (serverVersion < MinServerVer.SSHORTX && order.ExemptCode != -1)
       {
-        ReportError(id, EClientErrors.UPDATE_TWS, "  It does not support exemptCode parameter.");
+        ReportError(id, Util.CurrentTimeMillis(), EClientErrors.UPDATE_TWS, "  It does not support exemptCode parameter.");
         return false;
       }
 
       if (serverVersion < MinServerVer.HEDGE_ORDERS && !IsEmpty(order.HedgeType))
       {
-        ReportError(id, EClientErrors.UPDATE_TWS, "  It does not support hedge orders.");
+        ReportError(id, Util.CurrentTimeMillis(), EClientErrors.UPDATE_TWS, "  It does not support hedge orders.");
         return false;
       }
 
       if (serverVersion < MinServerVer.OPT_OUT_SMART_ROUTING && order.OptOutSmartRouting)
       {
-        ReportError(id, EClientErrors.UPDATE_TWS, "  It does not support optOutSmartRouting parameter.");
+        ReportError(id, Util.CurrentTimeMillis(), EClientErrors.UPDATE_TWS, "  It does not support optOutSmartRouting parameter.");
         return false;
       }
 
@@ -3221,7 +5576,7 @@ namespace IBApi
                                                                || !IsEmpty(order.DeltaNeutralClearingAccount)
                                                                || !IsEmpty(order.DeltaNeutralClearingIntent)))
       {
-        ReportError(id, EClientErrors.UPDATE_TWS, "  It does not support deltaNeutral parameters: ConId, SettlingFirm, ClearingAccount, ClearingIntent");
+        ReportError(id, Util.CurrentTimeMillis(), EClientErrors.UPDATE_TWS, "  It does not support deltaNeutral parameters: ConId, SettlingFirm, ClearingAccount, ClearingIntent");
         return false;
       }
 
@@ -3230,7 +5585,7 @@ namespace IBApi
                                                                     || order.DeltaNeutralShortSaleSlot > 0
                                                                     || !IsEmpty(order.DeltaNeutralDesignatedLocation)))
       {
-        ReportError(id, EClientErrors.UPDATE_TWS,
+        ReportError(id, Util.CurrentTimeMillis(), EClientErrors.UPDATE_TWS,
             "  It does not support deltaNeutral parameters: OpenClose, ShortSale, ShortSaleSlot, DesignatedLocation");
         return false;
       }
@@ -3245,7 +5600,7 @@ namespace IBApi
             order.ScaleInitFillQty != int.MaxValue ||
             order.ScaleRandomPercent)
         {
-          ReportError(id, EClientErrors.UPDATE_TWS, "  It does not support Scale order parameters: PriceAdjustValue, PriceAdjustInterval, ProfitOffset, AutoReset, InitPosition, InitFillQty and RandomPercent");
+          ReportError(id, Util.CurrentTimeMillis(), EClientErrors.UPDATE_TWS, "  It does not support Scale order parameters: PriceAdjustValue, PriceAdjustInterval, ProfitOffset, AutoReset, InitPosition, InitFillQty and RandomPercent");
           return false;
         }
       }
@@ -3257,106 +5612,106 @@ namespace IBApi
         {
           orderComboLeg = order.OrderComboLegs[i];
           if (orderComboLeg.Price == double.MaxValue) continue;
-          ReportError(id, EClientErrors.UPDATE_TWS, "  It does not support per-leg prices for order combo legs.");
+          ReportError(id, Util.CurrentTimeMillis(), EClientErrors.UPDATE_TWS, "  It does not support per-leg prices for order combo legs.");
           return false;
         }
       }
 
       if (serverVersion < MinServerVer.TRAILING_PERCENT && order.TrailingPercent != double.MaxValue)
       {
-        ReportError(id, EClientErrors.UPDATE_TWS, "  It does not support trailing percent parameter.");
+        ReportError(id, Util.CurrentTimeMillis(), EClientErrors.UPDATE_TWS, "  It does not support trailing percent parameter.");
         return false;
       }
 
       if (serverVersion < MinServerVer.ALGO_ID && !IsEmpty(order.AlgoId))
       {
-        ReportError(id, EClientErrors.UPDATE_TWS, " It does not support algoId parameter");
+        ReportError(id, Util.CurrentTimeMillis(), EClientErrors.UPDATE_TWS, " It does not support algoId parameter");
         return false;
       }
 
       if (serverVersion < MinServerVer.SCALE_TABLE && (!IsEmpty(order.ScaleTable) || !IsEmpty(order.ActiveStartTime) || !IsEmpty(order.ActiveStopTime)))
       {
-        ReportError(id, EClientErrors.UPDATE_TWS, "  It does not support scaleTable, activeStartTime nor activeStopTime parameters.");
+        ReportError(id, Util.CurrentTimeMillis(), EClientErrors.UPDATE_TWS, "  It does not support scaleTable, activeStartTime nor activeStopTime parameters.");
         return false;
       }
 
       if (serverVersion < MinServerVer.EXT_OPERATOR && !IsEmpty(order.ExtOperator))
       {
-        ReportError(id, EClientErrors.UPDATE_TWS, " It does not support extOperator parameter");
+        ReportError(id, Util.CurrentTimeMillis(), EClientErrors.UPDATE_TWS, " It does not support extOperator parameter");
         return false;
       }
 
       if (serverVersion < MinServerVer.CASH_QTY && order.CashQty != double.MaxValue)
       {
-        ReportError(id, EClientErrors.UPDATE_TWS, " It does not support cashQty parameter");
+        ReportError(id, Util.CurrentTimeMillis(), EClientErrors.UPDATE_TWS, " It does not support cashQty parameter");
         return false;
       }
 
       if (serverVersion < MinServerVer.DECISION_MAKER && (!IsEmpty(order.Mifid2DecisionMaker)
                                                           || !IsEmpty(order.Mifid2DecisionAlgo)))
       {
-        ReportError(id, EClientErrors.UPDATE_TWS, " It does not support MIFID II decision maker parameters");
+        ReportError(id, Util.CurrentTimeMillis(), EClientErrors.UPDATE_TWS, " It does not support MIFID II decision maker parameters");
         return false;
       }
 
       if (serverVersion < MinServerVer.DECISION_MAKER && (!IsEmpty(order.Mifid2ExecutionTrader)
                                                           || !IsEmpty(order.Mifid2ExecutionAlgo)))
       {
-        ReportError(id, EClientErrors.UPDATE_TWS, " It does not support MIFID II execution parameters");
+        ReportError(id, Util.CurrentTimeMillis(), EClientErrors.UPDATE_TWS, " It does not support MIFID II execution parameters");
         return false;
       }
 
       if (serverVersion < MinServerVer.AUTO_PRICE_FOR_HEDGE && order.DontUseAutoPriceForHedge)
       {
-        ReportError(id, EClientErrors.UPDATE_TWS, " It does not support don't use auto price for hedge parameter");
+        ReportError(id, Util.CurrentTimeMillis(), EClientErrors.UPDATE_TWS, " It does not support don't use auto price for hedge parameter");
         return false;
       }
 
       if (serverVersion < MinServerVer.ORDER_CONTAINER && order.IsOmsContainer)
       {
-        ReportError(id, EClientErrors.UPDATE_TWS, " It does not support oms container parameter.");
+        ReportError(id, Util.CurrentTimeMillis(), EClientErrors.UPDATE_TWS, " It does not support oms container parameter.");
         return false;
       }
 
       if (serverVersion < MinServerVer.D_PEG_ORDERS && order.DiscretionaryUpToLimitPrice)
       {
-        ReportError(id, EClientErrors.UPDATE_TWS, " It does not support D-Peg orders.");
+        ReportError(id, Util.CurrentTimeMillis(), EClientErrors.UPDATE_TWS, " It does not support D-Peg orders.");
         return false;
       }
 
       if (serverVersion < MinServerVer.PRICE_MGMT_ALGO && order.UsePriceMgmtAlgo.HasValue)
       {
-        ReportError(id, EClientErrors.UPDATE_TWS, " It does not support Use Price Management Algo requests.");
+        ReportError(id, Util.CurrentTimeMillis(), EClientErrors.UPDATE_TWS, " It does not support Use Price Management Algo requests.");
         return false;
       }
 
       if (serverVersion < MinServerVer.DURATION && order.Duration != int.MaxValue)
       {
-        ReportError(id, EClientErrors.UPDATE_TWS, " It does not support duration attribute.");
+        ReportError(id, Util.CurrentTimeMillis(), EClientErrors.UPDATE_TWS, " It does not support duration attribute.");
         return false;
       }
 
       if (serverVersion < MinServerVer.POST_TO_ATS && order.PostToAts != int.MaxValue)
       {
-        ReportError(id, EClientErrors.UPDATE_TWS, " It does not support postToAts attribute.");
+        ReportError(id, Util.CurrentTimeMillis(), EClientErrors.UPDATE_TWS, " It does not support postToAts attribute.");
         return false;
       }
 
       if (serverVersion < MinServerVer.AUTO_CANCEL_PARENT && order.AutoCancelParent)
       {
-        ReportError(id, EClientErrors.UPDATE_TWS, " It does not support autoCancelParent attribute.");
+        ReportError(id, Util.CurrentTimeMillis(), EClientErrors.UPDATE_TWS, " It does not support autoCancelParent attribute.");
         return false;
       }
 
       if (serverVersion < MinServerVer.ADVANCED_ORDER_REJECT && !IsEmpty(order.AdvancedErrorOverride))
       {
-        ReportError(id, EClientErrors.UPDATE_TWS, " It does not support advanced error override attribute.");
+        ReportError(id, Util.CurrentTimeMillis(), EClientErrors.UPDATE_TWS, " It does not support advanced error override attribute.");
         return false;
       }
 
       if (serverVersion < MinServerVer.MANUAL_ORDER_TIME && !IsEmpty(order.ManualOrderTime))
       {
-        ReportError(id, EClientErrors.UPDATE_TWS, " It does not support manual order time attribute.");
+        ReportError(id, Util.CurrentTimeMillis(), EClientErrors.UPDATE_TWS, " It does not support manual order time attribute.");
         return false;
       }
 
@@ -3366,19 +5721,37 @@ namespace IBApi
                                                                   order.MidOffsetAtWhole != double.MaxValue ||
                                                                   order.MidOffsetAtHalf != double.MaxValue))
       {
-        ReportError(id, EClientErrors.UPDATE_TWS, "  It does not support PEG BEST / PEG MID order parameters: minTradeQty, minCompeteSize, competeAgainstBestOffset, midOffsetAtWhole and midOffsetAtHalf");
+        ReportError(id, Util.CurrentTimeMillis(), EClientErrors.UPDATE_TWS, "  It does not support PEG BEST / PEG MID order parameters: minTradeQty, minCompeteSize, competeAgainstBestOffset, midOffsetAtWhole and midOffsetAtHalf");
         return false;
       }
 
       if (serverVersion < MinServerVer.MIN_SERVER_VER_CUSTOMER_ACCOUNT && !IsEmpty(order.CustomerAccount))
       {
-        ReportError(id, EClientErrors.UPDATE_TWS, " It does not support customer account parameter.");
+        ReportError(id, Util.CurrentTimeMillis(), EClientErrors.UPDATE_TWS, " It does not support customer account parameter.");
         return false;
       }
 
       if (serverVersion < MinServerVer.MIN_SERVER_VER_PROFESSIONAL_CUSTOMER && order.ProfessionalCustomer)
       {
-        ReportError(id, EClientErrors.UPDATE_TWS, " It does not support professional customer parameter.");
+        ReportError(id, Util.CurrentTimeMillis(), EClientErrors.UPDATE_TWS, " It does not support professional customer parameter.");
+        return false;
+      }
+
+      if (serverVersion < MinServerVer.MIN_SERVER_VER_INCLUDE_OVERNIGHT && order.IncludeOvernight)
+      {
+        ReportError(id, Util.CurrentTimeMillis(), EClientErrors.UPDATE_TWS, " It does not support include overnight parameter.");
+        return false;
+      }
+
+      if (serverVersion < MinServerVer.MIN_SERVER_VER_CME_TAGGING_FIELDS && order.ManualOrderIndicator != int.MaxValue)
+      {
+        ReportError(id, Util.CurrentTimeMillis(), EClientErrors.UPDATE_TWS, " It does not support manual order indicator parameter.");
+        return false;
+      }
+
+      if (serverVersion < MinServerVer.MIN_SERVER_VER_IMBALANCE_ONLY && order.ImbalanceOnly)
+      {
+        ReportError(id, Util.CurrentTimeMillis(), EClientErrors.UPDATE_TWS, " It does not support imbalance only parameter.");
         return false;
       }
 

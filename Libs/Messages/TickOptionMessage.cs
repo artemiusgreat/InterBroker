@@ -1,10 +1,13 @@
 /* Copyright (C) 2019 Interactive Brokers LLC. All rights reserved. This code is subject to the terms
  * and conditions of the IB API Non-Commercial License or the IB API Commercial License, as applicable. */
 
-namespace InteractiveBrokers.Messages
+namespace IBApi.Messages
 {
   public class TickOptionMessage : MarketDataMessage
   {
+    public TickOptionMessage() : base(0, 0)
+    { }
+
     public TickOptionMessage(int requestId, int field, int tickAttrib, double impliedVolatility, double delta, double optPrice, double pvDividend, double gamma, double vega, double theta, double undPrice)
         : base(requestId, field)
     {

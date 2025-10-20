@@ -5,25 +5,25 @@ using System.Runtime.InteropServices;
 
 namespace IBApi
 {
-    /**
-     * @class HistoricalSession
-     * @brief The historical session. Used when requesting historical schedule with whatToShow = SCHEDULE
-     * @sa EClient, EWrapper
-     */
-    [ComVisible(true)]
-    public class HistoricalSession
+  /**
+   * @class HistoricalSession
+   * @brief The historical session. Used when requesting historical schedule with whatToShow = SCHEDULE
+   * @sa EClient, EWrapper
+   */
+  [ComVisible(true)]
+  public class HistoricalSession
+  {
+    public HistoricalSession() { }
+
+    public HistoricalSession(string startDateTime, string endDateTime, string refDate)
     {
-        public HistoricalSession() { }
-
-        public HistoricalSession(string startDateTime, string endDateTime, string refDate)
-        {
-            StartDateTime = startDateTime;
-            EndDateTime = endDateTime;
-            RefDate = refDate;
-        }
-
-        public string StartDateTime { get; private set; }
-        public string EndDateTime { get; private set; }
-        public string RefDate { get; private set; }
+      StartDateTime = startDateTime;
+      EndDateTime = endDateTime;
+      RefDate = refDate;
     }
+
+    public string StartDateTime { get; private set; }
+    public string EndDateTime { get; private set; }
+    public string RefDate { get; private set; }
+  }
 }

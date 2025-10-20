@@ -1,15 +1,15 @@
-﻿/* Copyright (C) 2019 Interactive Brokers LLC. All rights reserved. This code is subject to the terms
+/* Copyright (C) 2019 Interactive Brokers LLC. All rights reserved. This code is subject to the terms
  * and conditions of the IB API Non-Commercial License or the IB API Commercial License, as applicable. */
 
-namespace InteractiveBrokers.Messages
+namespace IBApi.Messages
 {
-    class ScannerParametersMessage
+  public class ScannerParametersMessage
+  {
+    public ScannerParametersMessage(string data)
     {
-        public ScannerParametersMessage(string data)
-        {
-            XmlData = data;
-        }
-
-        public string XmlData { get; set; }
+      XmlData = data;
     }
+
+    public string XmlData { get; set; }
+  }
 }

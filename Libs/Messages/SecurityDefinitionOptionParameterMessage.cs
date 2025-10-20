@@ -3,7 +3,7 @@
 
 using System.Collections.Generic;
 
-namespace InteractiveBrokers.Messages
+namespace IBApi.Messages
 {
   public class SecurityDefinitionOptionParameterMessage
   {

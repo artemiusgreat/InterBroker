@@ -3,7 +3,7 @@
 
 using IBApi;
 
-namespace InteractiveBrokers.Messages
+namespace IBApi.Messages
 {
   public class PositionMessage
   {
@@ -11,7 +11,7 @@ namespace InteractiveBrokers.Messages
     {
       Account = account;
       Contract = contract;
-      Position = (double)pos;
+      Position = pos;
       AverageCost = avgCost;
     }
 
@@ -19,7 +19,7 @@ namespace InteractiveBrokers.Messages
 
     public Contract Contract { get; set; }
 
-    public double Position { get; set; }
+    public decimal Position { get; set; }
 
     public double AverageCost { get; set; }
   }

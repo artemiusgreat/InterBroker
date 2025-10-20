@@ -3,7 +3,7 @@
 
 using IBApi;
 
-namespace InteractiveBrokers.Messages
+namespace IBApi.Messages
 {
   public class PositionMultiMessage
   {

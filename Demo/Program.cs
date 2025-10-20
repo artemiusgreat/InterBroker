@@ -45,7 +45,7 @@ namespace Demo
         Action = "BUY",
         OrderType = "LMT",
         TotalQuantity = 1,
-        LmtPrice = prices.Last().PriceAsk,
+        LmtPrice = prices.Last().Last.Value,
       };
 
       var orderResponse = await broker.SendOrder(

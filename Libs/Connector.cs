@@ -1,13 +1,13 @@
 using IBApi;
+using IBApi.protobuf;
+using IBApi.Messages;
 using InteractiveBrokers.Enums;
-using InteractiveBrokers.Messages;
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
-using static InteractiveBrokers.IBClient;
 
 namespace InteractiveBrokers
 {
@@ -115,34 +115,78 @@ namespace InteractiveBrokers
     /// <param name="dataType"></param>
     /// <param name="count"></param>
     /// <param name="session"></param>
-    public virtual async Task<IList<HistoricalTickBidAsk>> GetTicks(CancellationToken cleaner, Contract contract, DateTime minDate, DateTime maxDate, string dataType, int count = 1, int session = 0)
+    public virtual async Task<IList<PriceMessage>> GetTicks(CancellationToken cleaner, Contract contract, DateTime minDate, DateTime maxDate, string dataType, int count = 1, int session = 0)
     {
       var nextId = Id;
-      var items = new HistoricalTickBidAsk[0];
+      var items = new List<PriceMessage>();
       var source = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
 
-      void subscribe(HistoricalTicksMessage message)
+      void subscribeToTicks(HistoricalTickMessage message)
       {
         if (Equals(nextId, message.ReqId))
         {
-          items = message.Items;
-          unsubscribe();
+          items.Add(new PriceMessage
+          {
+            Last = message.Price,
+            Time = message.Time,
+            BidSize = (double)message.Size,
+            AskSize = (double)message.Size
+          });
         }
       }
 
-      void unsubscribe()
+      void subscribeToPrices(HistoricalTickLastMessage message)
       {
-        Instance.historicalTicksList -= subscribe;
-        source.TrySetResult(true);
+        if (Equals(nextId, message.ReqId))
+        {
+          items.Add(new PriceMessage
+          {
+            Last = message.Price,
+            Time = message.Time,
+            BidSize = (double)message.Size,
+            AskSize = (double)message.Size
+          });
+        }
+      }
+
+      void subscribeToRanges(HistoricalTickBidAskMessage message)
+      {
+        if (Equals(nextId, message.ReqId))
+        {
+          items.Add(new PriceMessage
+          {
+            Time = message.Time,
+            Bid = message.PriceBid,
+            Ask = message.PriceAsk,
+            BidSize = (double)message.SizeBid,
+            AskSize = (double)message.SizeAsk,
+            Last = message.PriceBid
+          });
+        }
+      }
+
+      void unsubscribe(int reqId)
+      {
+        if (Equals(nextId, reqId))
+        {
+          Instance.historicalTick -= subscribeToTicks;
+          Instance.historicalTickLast -= subscribeToPrices;
+          Instance.historicalTickBidAsk -= subscribeToRanges;
+          Instance.historicalTickEnd -= unsubscribe;
+          source.TrySetResult(true);
+        }
       }
 
       var minDateStr = minDate.ToString($"yyyyMMdd-HH:mm:ss");
       var maxDateStr = maxDate.ToString($"yyyyMMdd-HH:mm:ss");
 
-      Instance.historicalTicksList += subscribe;
+      Instance.historicalTick += subscribeToTicks;
+      Instance.historicalTickLast += subscribeToPrices;
+      Instance.historicalTickBidAsk += subscribeToRanges;
+      Instance.historicalTickEnd += unsubscribe;
       Instance.ClientSocket.reqHistoricalTicks(nextId, contract, minDateStr, maxDateStr, count, dataType, session, false, null);
 
-      await await Task.WhenAny(source.Task, Task.Delay(Timeout, cleaner).ContinueWith(o => unsubscribe()));
+      await await Task.WhenAny(source.Task, Task.Delay(Timeout, cleaner).ContinueWith(o => unsubscribe(nextId)));
       await Task.Delay(Span);
 
       return items;
@@ -321,17 +365,36 @@ namespace InteractiveBrokers
       var nextId = Id;
       var response = new PriceMessage();
 
+      void subscribeToSizes(TickSizeMessage message)
+      {
+        if (Equals(nextId, message.RequestId))
+        {
+          switch (message.Field)
+          {
+            case (int)PropertyEnum.BidSize: response.Bid = (double?)message.Size ?? response.Bid; break;
+            case (int)PropertyEnum.AskSize: response.Ask = (double?)message.Size ?? response.Ask; break;
+          }
+
+          response.Time = DateTime.Now.Ticks;
+
+          if (response.Bid is null || response.Ask is null)
+          {
+            return;
+          }
+
+          OnPrice(response);
+        }
+      }
+
       void subscribeToPrices(TickPriceMessage message)
       {
         if (Equals(nextId, message.RequestId))
         {
           switch (message.Field)
           {
-            case (int)PropertyEnum.BidSize: response.BidSize = message.Data ?? response.BidSize; break;
-            case (int)PropertyEnum.AskSize: response.AskSize = message.Data ?? response.AskSize; break;
-            case (int)PropertyEnum.BidPrice: response.Bid = message.Data ?? response.Bid; break;
-            case (int)PropertyEnum.AskPrice: response.Ask = message.Data ?? response.Ask; break;
-            case (int)PropertyEnum.LastPrice: response.Last = message.Data ?? response.Last; break;
+            case (int)PropertyEnum.BidPrice: response.BidSize = (double?)message.Price ?? response.BidSize; break;
+            case (int)PropertyEnum.AskPrice: response.AskSize = (double?)message.Price ?? response.AskSize; break;
+            case (int)PropertyEnum.LastPrice: response.Last = (double?)message.Price ?? response.Last; break;
           }
 
           response.Time = DateTime.Now.Ticks;
@@ -346,6 +409,7 @@ namespace InteractiveBrokers
         }
       }
 
+      Instance.TickSize += subscribeToSizes;
       Instance.TickPrice += subscribeToPrices;
       Instance.ClientSocket.reqMktData(nextId, contract, dataType, snapshot, regSnapshot, null);
 
@@ -469,7 +533,7 @@ namespace InteractiveBrokers
       }
 
       Instance.OrderStatus += subscribe;
-      Instance.ClientSocket.cancelOrder(orderId, string.Empty);
+      Instance.ClientSocket.cancelOrder(orderId, new OrderCancel());
 
       await await Task.WhenAny(source.Task, Task.Delay(Timeout, cleaner).ContinueWith(o => unsubscribe()));
       await Task.Delay(Span);
@@ -490,9 +554,9 @@ namespace InteractiveBrokers
     /// Subscribe to errors
     /// </summary>
     /// <param name="action"></param>
-    public virtual void SubscribeToErrors(Action<int, int, string, string, Exception> action)
+    public virtual void SubscribeToErrors(Action<long, int, int, string, string, Exception> action)
     {
-      Instance.Error += (id, code, message, error, e) =>
+      Instance.Error += (id, stamp, code, message, error, e) =>
       {
         switch (true)
         {
@@ -500,7 +564,7 @@ namespace InteractiveBrokers
           case true when Equals(code, (int)ClientErrorEnum.ConnectionError): Connect(); break;
         }
 
-        action(id, code, message, error, e);
+        action(stamp, id, code, message, error, e);
       };
     }
 

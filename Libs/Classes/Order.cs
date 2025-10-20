@@ -1,4 +1,4 @@
-/* Copyright (C) 2024 Interactive Brokers LLC. All rights reserved. This code is subject to the terms
+/* Copyright (C) 2025 Interactive Brokers LLC. All rights reserved. This code is subject to the terms
  * and conditions of the IB API Non-Commercial License or the IB API Commercial License, as applicable. */
 
 using System.Collections.Generic;
@@ -95,7 +95,7 @@ namespace IBApi
     /**
      * @brief The Host order identifier.
      */
-    public int PermId { get; set; }
+    public long PermId { get; set; }
 
     /**
      * @brief Identifies the side. \n
@@ -124,8 +124,8 @@ namespace IBApi
     public double LmtPrice { get; set; }
 
     /**
-         * @brief Generic field to contain the stop price for <b>STP LMT</b> orders, trailing amount, etc.
-         */
+     * @brief Generic field to contain the stop price for <b>STP LMT</b> orders, trailing amount, etc.
+     */
     public double AuxPrice { get; set; }
 
     /**
@@ -230,7 +230,7 @@ namespace IBApi
 
     /**
      * @brief Overrides TWS constraints.\n
-     * Precautionary constraints are defined on the TWS Presets page, and help ensure tha tyour price and size order values are reasonable. Orders sent from the API are also validated against these safety constraints, and may be rejected if any constraint is violated. To override validation, set this parameter’s value to True.
+     * Precautionary constraints are defined on the TWS Presets page, and help ensure that your price and size order values are reasonable. Orders sent from the API are also validated against these safety constraints, and may be rejected if any constraint is violated. To override validation, set this parameter’s value to True.
      */
     public bool OverridePercentageConstraints { get; set; }
 
@@ -560,7 +560,7 @@ namespace IBApi
 
     /**
      * @brief The algorithm strategy.\n
-     * As of API verion 9.6, the following algorithms are supported:\n
+     * As of API version 9.6, the following algorithms are supported:\n
      *      <b>ArrivalPx</b> - Arrival Price \n
      *      <b>DarkIce</b> - Dark Ice \n
      *      <b>PctVol</b> - Percentage of Volume \n
@@ -577,8 +577,8 @@ namespace IBApi
     public List<TagValue> AlgoParams { get; set; }
 
     /**
-     * @brief Allows to retrieve the commissions and margin information.\n
-     * When placing an order with this attribute set to true, the order will not be placed as such. Instead it will used to request the commissions and margin information that would result from this order.
+     * @brief Allows to retrieve the commission and fees and margin information.\n
+     * When placing an order with this attribute set to true, the order will not be placed as such. Instead it will used to request the commission and fees and margin information that would result from this order.
      */
     public bool WhatIf { get; set; }
 
@@ -787,6 +787,46 @@ namespace IBApi
      */
     public string BondAccruedInterest { get; set; }
 
+    /**
+     * @brief Include Overnight
+     */
+    public bool IncludeOvernight { get; set; }
+
+    /**
+     * @brief Manual Order Indicator
+     */
+    public int ManualOrderIndicator { get; set; }
+
+    /**
+     * @brief Submitter
+     */
+    public string Submitter { get; set; }
+
+    /**
+     * @brief PostOnly
+     */
+    public bool PostOnly { get; set; }
+
+    /**
+     * @brief AllowPreOpen
+     */
+    public bool AllowPreOpen { get; set; }
+
+    /**
+     * @brief IgnoreOpenAuction
+     */
+    public bool IgnoreOpenAuction { get; set; }
+
+    /**
+     * @brief Deactivate
+     */
+    public bool Deactivate { get; set; }
+
+    /**
+     * @brief SeekPriceImprovement
+     */
+    public bool? SeekPriceImprovement { get; set; }
+
     public Order()
     {
       LmtPrice = double.MaxValue;
@@ -872,6 +912,14 @@ namespace IBApi
       CustomerAccount = EMPTY_STR;
       ProfessionalCustomer = false;
       BondAccruedInterest = EMPTY_STR;
+      IncludeOvernight = false;
+      ManualOrderIndicator = int.MaxValue;
+      Submitter = EMPTY_STR;
+      PostOnly = false;
+      AllowPreOpen = false;
+      IgnoreOpenAuction = false;
+      Deactivate = false;
+      SeekPriceImprovement = null;
     }
 
     // Note: Two orders can be 'equivalent' even if all fields do not match. This function is not intended to be used with Order objects returned from TWS.
@@ -965,7 +1013,14 @@ namespace IBApi
           CompeteAgainstBestOffset != l_theOther.CompeteAgainstBestOffset ||
           MidOffsetAtWhole != l_theOther.MidOffsetAtWhole ||
           MidOffsetAtHalf != l_theOther.MidOffsetAtHalf ||
-          ProfessionalCustomer != l_theOther.ProfessionalCustomer)
+          ProfessionalCustomer != l_theOther.ProfessionalCustomer ||
+          IncludeOvernight != l_theOther.IncludeOvernight ||
+          ManualOrderIndicator != l_theOther.ManualOrderIndicator ||
+          PostOnly != l_theOther.PostOnly ||
+          AllowPreOpen != l_theOther.AllowPreOpen ||
+          IgnoreOpenAuction != l_theOther.IgnoreOpenAuction ||
+          Deactivate != l_theOther.Deactivate ||
+          SeekPriceImprovement != l_theOther.SeekPriceImprovement)
       {
         return false;
       }
@@ -1007,6 +1062,7 @@ namespace IBApi
           Util.StringCompare(AdvancedErrorOverride, l_theOther.AdvancedErrorOverride) != 0 ||
           Util.StringCompare(ManualOrderTime, l_theOther.ManualOrderTime) != 0 ||
           Util.StringCompare(CustomerAccount, l_theOther.CustomerAccount) != 0 ||
+          Util.StringCompare(Submitter, l_theOther.Submitter) != 0 ||
           Util.StringCompare(BondAccruedInterest, l_theOther.BondAccruedInterest) != 0)
       {
         return false;
@@ -1172,6 +1228,14 @@ namespace IBApi
       hashCode *= -1521134295 + EqualityComparer<string>.Default.GetHashCode(CustomerAccount);
       hashCode *= -1521134295 + ProfessionalCustomer.GetHashCode();
       hashCode *= -1521134295 + EqualityComparer<string>.Default.GetHashCode(BondAccruedInterest);
+      hashCode *= -1521134295 + IncludeOvernight.GetHashCode();
+      hashCode *= -1521134295 + ManualOrderIndicator.GetHashCode();
+      hashCode *= -1521134295 + EqualityComparer<string>.Default.GetHashCode(Submitter);
+      hashCode *= -1521134295 + PostOnly.GetHashCode();
+      hashCode *= -1521134295 + AllowPreOpen.GetHashCode();
+      hashCode *= -1521134295 + IgnoreOpenAuction.GetHashCode();
+      hashCode *= -1521134295 + Deactivate.GetHashCode();
+      hashCode *= -1521134295 + EqualityComparer<bool?>.Default.GetHashCode(SeekPriceImprovement);
 
       return hashCode;
     }
@@ -1276,7 +1340,7 @@ namespace IBApi
     public bool DiscretionaryUpToLimitPrice { get; set; }
 
     /**
-     * @brief Specifies wether to use Price Management Algo. <i>CTCI users only.</i>
+     * @brief Specifies whether to use Price Management Algo. <i>CTCI users only.</i>
      */
     public bool? UsePriceMgmtAlgo { get; set; }
 
