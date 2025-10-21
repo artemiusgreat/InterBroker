@@ -1,15 +1,16 @@
 using IBApi;
-using IBApi.protobuf;
 using IBApi.Messages;
-using InteractiveBrokers.Enums;
+using IBApi.protobuf;
+using IBApi.Enums;
 using System;
+using System.Collections;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 
-namespace InteractiveBrokers
+namespace IBApi
 {
   public class InterBroker
   {
@@ -23,9 +24,6 @@ namespace InteractiveBrokers
 
     public virtual TimeSpan Span { get; set; } = TimeSpan.Zero;
     public virtual TimeSpan Timeout { get; set; } = TimeSpan.FromSeconds(30);
-
-    public Action<PriceMessage> OnPrice { get; set; } = o => { };
-    public Action<ComputationMessage> OnComputation { get; set; } = o => { };
 
     /// <summary>
     /// Connect
@@ -58,15 +56,6 @@ namespace InteractiveBrokers
     public virtual void Disconnect()
     {
       Instance?.ClientSocket?.eDisconnect();
-    }
-
-    /// <summary>
-    /// Unsubscribe from data streams
-    /// </summary>
-    /// <param name="id"></param>
-    public virtual void Unsubscribe(int id)
-    {
-      Instance.ClientSocket.cancelMktData(id);
     }
 
     /// <summary>
@@ -308,121 +297,10 @@ namespace InteractiveBrokers
     }
 
     /// <summary>
-    /// Subscribe to computations
-    /// </summary>
-    /// <param name="contract"></param>
-    /// <param name="dataType"></param>
-    /// <param name="snapshot"></param>
-    /// <param name="regSnapshot"></param>
-    public virtual async Task<int> SubscribeToComputations(Contract contract, string dataType, bool snapshot = false, bool regSnapshot = false)
-    {
-      var nextId = Id;
-      var response = new ComputationMessage();
-
-      double? value(double data, double min, double max, double? original)
-      {
-        switch (true)
-        {
-          case true when data < short.MinValue:
-          case true when data > short.MaxValue:
-          case true when data < min:
-          case true when data > max: return original;
-        }
-
-        return Math.Round(data, 2);
-      }
-
-      void subscribe(TickOptionMessage message)
-      {
-        if (Equals(nextId, message.RequestId))
-        {
-          response.Delta = value(message.Delta, -1, 1, null);
-          response.Gamma = value(message.Gamma, 0, short.MaxValue, null);
-          response.Theta = value(message.Theta, 0, short.MaxValue, null);
-          response.Vega = value(message.Vega, 0, short.MaxValue, null);
-
-          OnComputation(response);
-        }
-      }
-
-      Instance.TickOptionCommunication += subscribe;
-      Instance.ClientSocket.reqMktData(nextId, contract, dataType, snapshot, regSnapshot, null);
-
-      await Task.Delay(Span);
-
-      return nextId;
-    }
-
-    /// <summary>
-    /// Get latest quote
-    /// </summary>
-    /// <param name="contract"></param>
-    /// <param name="dataType"></param>
-    /// <param name="snapshot"></param>
-    /// <param name="regSnapshot"></param>
-    public virtual async Task<int> SubscribeToTicks(Contract contract, string dataType, bool snapshot = false, bool regSnapshot = false)
-    {
-      var nextId = Id;
-      var response = new PriceMessage();
-
-      void subscribeToSizes(TickSizeMessage message)
-      {
-        if (Equals(nextId, message.RequestId))
-        {
-          switch (message.Field)
-          {
-            case (int)PropertyEnum.BidSize: response.Bid = (double?)message.Size ?? response.Bid; break;
-            case (int)PropertyEnum.AskSize: response.Ask = (double?)message.Size ?? response.Ask; break;
-          }
-
-          response.Time = DateTime.Now.Ticks;
-
-          if (response.Bid is null || response.Ask is null)
-          {
-            return;
-          }
-
-          OnPrice(response);
-        }
-      }
-
-      void subscribeToPrices(TickPriceMessage message)
-      {
-        if (Equals(nextId, message.RequestId))
-        {
-          switch (message.Field)
-          {
-            case (int)PropertyEnum.BidPrice: response.BidSize = (double?)message.Price ?? response.BidSize; break;
-            case (int)PropertyEnum.AskPrice: response.AskSize = (double?)message.Price ?? response.AskSize; break;
-            case (int)PropertyEnum.LastPrice: response.Last = (double?)message.Price ?? response.Last; break;
-          }
-
-          response.Time = DateTime.Now.Ticks;
-          response.Last = response.Last is null ? response.Bid ?? response.Ask : response.Last;
-
-          if (response.Bid is null || response.Ask is null)
-          {
-            return;
-          }
-
-          OnPrice(response);
-        }
-      }
-
-      Instance.TickSize += subscribeToSizes;
-      Instance.TickPrice += subscribeToPrices;
-      Instance.ClientSocket.reqMktData(nextId, contract, dataType, snapshot, regSnapshot, null);
-
-      await Task.Delay(Span);
-
-      return nextId;
-    }
-
-    /// <summary>
     /// Sync open balance, order, and positions 
     /// </summary>
     /// <param name="cleaner"></param>
-    protected virtual async Task<Dictionary<string, string>> GetAccountSummary(CancellationToken cleaner)
+    public virtual async Task<Dictionary<string, string>> GetAccountSummary(CancellationToken cleaner)
     {
       var nextId = Id;
       var response = new Dictionary<string, string>();
@@ -576,6 +454,157 @@ namespace InteractiveBrokers
     {
       Instance.OpenOrder += o => action(o);
       Instance.ClientSocket.reqAutoOpenOrders(true);
+    }
+
+    /// <summary>
+    /// Subscribe to computations
+    /// </summary>
+    /// <param name="query"></param>
+    /// <param name="action"></param>
+    public virtual int SubscribeToComputations(DataStreamMessage query, Action<ComputationMessage> action)
+    {
+      var nextId = Id;
+      var response = new ComputationMessage();
+      var dataTypes = string.Join(",", query.DataTypes.Select(o => (int)o));
+
+      double? value(double data, double min, double max, double? original)
+      {
+        switch (true)
+        {
+          case true when data < short.MinValue:
+          case true when data > short.MaxValue:
+          case true when data < min:
+          case true when data > max: return original;
+        }
+
+        return Math.Round(data, 2);
+      }
+
+      void subscribe(TickOptionMessage message)
+      {
+        if (Equals(nextId, message.RequestId))
+        {
+          response.Delta = value(message.Delta, -1, 1, null);
+          response.Gamma = value(message.Gamma, 0, short.MaxValue, null);
+          response.Theta = value(message.Theta, 0, short.MaxValue, null);
+          response.Vega = value(message.Vega, 0, short.MaxValue, null);
+
+          action(response);
+        }
+      }
+
+      Instance.TickOptionCommunication += subscribe;
+      Instance.ClientSocket.reqMktData(nextId, query.Contract, dataTypes, query.Snapshot, query.RegSnapshot, query.Tags);
+
+      return nextId;
+    }
+
+    /// <summary>
+    /// Get latest quote
+    /// </summary>
+    /// <param name="query"></param>
+    /// <param name="action"></param>
+    public virtual int SubscribeToTicks(DataStreamMessage query, Action<PriceMessage> action)
+    {
+      var nextId = Id;
+      var response = new PriceMessage();
+      var dataTypes = string.Join(",", query.DataTypes.Select(o => (int)o));
+
+      void subscribeToSizes(TickSizeMessage message)
+      {
+        if (Equals(nextId, message.RequestId))
+        {
+          switch (message.Field)
+          {
+            case (int)PropertyEnum.BidSize: response.Bid = (double?)message.Size ?? response.Bid; break;
+            case (int)PropertyEnum.AskSize: response.Ask = (double?)message.Size ?? response.Ask; break;
+          }
+
+          if (response.Bid is null || response.Ask is null)
+          {
+            return;
+          }
+
+          action(response);
+        }
+      }
+
+      void subscribeToPrices(TickPriceMessage message)
+      {
+        if (Equals(nextId, message.RequestId))
+        {
+          switch (message.Field)
+          {
+            case (int)PropertyEnum.BidPrice: response.BidSize = (double?)message.Price ?? response.BidSize; break;
+            case (int)PropertyEnum.AskPrice: response.AskSize = (double?)message.Price ?? response.AskSize; break;
+            case (int)PropertyEnum.LastPrice: response.Last = (double?)message.Price ?? response.Last; break;
+          }
+
+          response.Time = DateTime.Now.Ticks;
+          response.Last = response.Last is null ? response.Bid ?? response.Ask : response.Last;
+
+          if (response.Bid is null || response.Ask is null)
+          {
+            return;
+          }
+
+          action(response);
+        }
+      }
+
+      Instance.TickSize += subscribeToSizes;
+      Instance.TickPrice += subscribeToPrices;
+      Instance.ClientSocket.reqMktData(nextId, query.Contract, dataTypes, query.Snapshot, query.RegSnapshot, query.Tags);
+
+      return nextId;
+    }
+
+    /// <summary>
+    /// Continuous updates
+    /// </summary>
+    /// <param name="account"></param>
+    /// <param name="action"></param>
+    public virtual int SubscribeToAccounts(string account, Action<AccountValueMessage> action)
+    {
+      var nextId = Id;
+
+      Instance.UpdateAccountValue += action;
+      Instance.ClientSocket.reqAccountUpdatesMulti(nextId, account, string.Empty, false);
+
+      return nextId;
+    }
+
+    /// <summary>
+    /// Continuous updates
+    /// </summary>
+    /// <param name="account"></param>
+    /// <param name="action"></param>
+    public virtual int SubscribeToPositions(string account, Action<UpdatePortfolioMessage> action)
+    {
+      var nextId = Id;
+
+      Instance.UpdatePortfolio += action;
+      Instance.ClientSocket.reqAccountUpdatesMulti(nextId, account, string.Empty, false);
+
+      return nextId;
+    }
+
+    /// <summary>
+    /// Unsubscribe from data streams
+    /// </summary>
+    /// <param name="id"></param>
+    public virtual void Unsubscribe(int id)
+    {
+      Instance.ClientSocket.cancelMktData(id);
+    }
+
+    /// <summary>
+    /// Unsubscribe from account updates
+    /// </summary>
+    /// <param name="id"></param>
+    public virtual void UnsubscribeFromUpdates(int id)
+    {
+      Instance.ClientSocket.cancelAccountUpdatesMulti(id);
     }
 
     /// <summary>

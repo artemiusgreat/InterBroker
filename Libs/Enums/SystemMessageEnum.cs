@@ -1,4 +1,4 @@
-namespace InteractiveBrokers.Enums
+namespace IBApi.Enums
 {
   public enum SystemMessageEnum : int
   {
