@@ -516,8 +516,8 @@ namespace IBApi
         {
           switch (message.Field)
           {
-            case (int)PropertyEnum.BidSize: response.Bid = (double?)message.Size ?? response.Bid; break;
-            case (int)PropertyEnum.AskSize: response.Ask = (double?)message.Size ?? response.Ask; break;
+            case (int)PropertyEnum.BidSize: response.BidSize = (double?)message.Size ?? response.BidSize; break;
+            case (int)PropertyEnum.AskSize: response.AskSize = (double?)message.Size ?? response.AskSize; break;
           }
 
           if (response.Bid is null || response.Ask is null)
@@ -535,8 +535,8 @@ namespace IBApi
         {
           switch (message.Field)
           {
-            case (int)PropertyEnum.BidPrice: response.BidSize = (double?)message.Price ?? response.BidSize; break;
-            case (int)PropertyEnum.AskPrice: response.AskSize = (double?)message.Price ?? response.AskSize; break;
+            case (int)PropertyEnum.BidPrice: response.Bid = (double?)message.Price ?? response.Bid; break;
+            case (int)PropertyEnum.AskPrice: response.Ask = (double?)message.Price ?? response.Ask; break;
             case (int)PropertyEnum.LastPrice: response.Last = (double?)message.Price ?? response.Last; break;
           }
 
