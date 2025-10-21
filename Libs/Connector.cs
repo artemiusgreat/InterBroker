@@ -564,14 +564,10 @@ namespace IBApi
     /// </summary>
     /// <param name="account"></param>
     /// <param name="action"></param>
-    public virtual int SubscribeToAccounts(string account, Action<AccountValueMessage> action)
+    public virtual void SubscribeToAccounts(string account, Action<AccountValueMessage> action)
     {
-      var nextId = Id;
-
       Instance.UpdateAccountValue += action;
-      Instance.ClientSocket.reqAccountUpdatesMulti(nextId, account, string.Empty, false);
-
-      return nextId;
+      Instance.ClientSocket.reqAccountUpdates(true, account);
     }
 
     /// <summary>
@@ -579,14 +575,10 @@ namespace IBApi
     /// </summary>
     /// <param name="account"></param>
     /// <param name="action"></param>
-    public virtual int SubscribeToPositions(string account, Action<UpdatePortfolioMessage> action)
+    public virtual void SubscribeToPositions(string account, Action<UpdatePortfolioMessage> action)
     {
-      var nextId = Id;
-
       Instance.UpdatePortfolio += action;
-      Instance.ClientSocket.reqAccountUpdatesMulti(nextId, account, string.Empty, false);
-
-      return nextId;
+      Instance.ClientSocket.reqAccountUpdates(true, account);
     }
 
     /// <summary>
@@ -601,10 +593,10 @@ namespace IBApi
     /// <summary>
     /// Unsubscribe from account updates
     /// </summary>
-    /// <param name="id"></param>
-    public virtual void UnsubscribeFromUpdates(int id)
+    /// <param name="account"></param>
+    public virtual void UnsubscribeFromUpdates(string account)
     {
-      Instance.ClientSocket.cancelAccountUpdatesMulti(id);
+      Instance.ClientSocket.reqAccountUpdates(false, account);
     }
 
     /// <summary>

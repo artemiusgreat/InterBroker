@@ -41,7 +41,7 @@ namespace Demo
 
       // Requests
 
-      var account = "<AccountNumber>";
+      var account = "DU9471614";
       var cleaner = CancellationToken.None;
       var contracts = await broker.GetContracts(cleaner, contract);
       var bars = await broker.GetBars(cleaner, contract, DateTime.Now, "1 D", "1 min", "MIDPOINT");
@@ -60,10 +60,10 @@ namespace Demo
       };
 
       var priceSub = broker.SubscribeToTicks(dataMessage, o => Console.WriteLine("Price: " + JsonSerializer.Serialize(o)));
-      var accountSub = broker.SubscribeToAccounts(account, o => Console.WriteLine("Account: " + JsonSerializer.Serialize(o)));
-      var positionSub = broker.SubscribeToPositions(account, o => Console.WriteLine("Position: " + JsonSerializer.Serialize(o)));
 
-      //broker.SubscribeToOrders(o => Console.WriteLine("Order: " + JsonSerializer.Serialize(o)));
+      broker.SubscribeToAccounts(account, o => Console.WriteLine("Account: " + JsonSerializer.Serialize(o)));
+      broker.SubscribeToPositions(account, o => Console.WriteLine("Position: " + JsonSerializer.Serialize(o)));
+      broker.SubscribeToOrders(o => Console.WriteLine("Order: " + JsonSerializer.Serialize(o)));
 
       // Orders
 
@@ -87,8 +87,7 @@ namespace Demo
       Console.ReadKey();
 
       broker.Unsubscribe(priceSub);
-      broker.UnsubscribeFromUpdates(accountSub);
-      broker.UnsubscribeFromUpdates(positionSub);
+      broker.UnsubscribeFromUpdates(account);
       broker.Disconnect();
     }
   }
