@@ -23,10 +23,12 @@ var broker = new InterBroker
 
 var contract = new Contract
 {
-  Symbol = "AAPL",
-  SecType = "STK",
-  Exchange = "SMART",
-  Currency = "USD"
+  Symbol = "ES",
+  LocalSymbol = "ESZ5",
+  SecType = "FUT",
+  Exchange = "CME",
+  Currency = "USD",
+  LastTradeDateOrContractMonth = "202512"
 };
 
 var optionContract = new Contract
@@ -40,20 +42,40 @@ var optionContract = new Contract
 
 broker.Connect();
 
+// Requests
+
+var account = "<AccountNumber>";
 var cleaner = CancellationToken.None;
 var contracts = await broker.GetContracts(cleaner, contract);
 var bars = await broker.GetBars(cleaner, contract, DateTime.Now, "1 D", "1 min", "MIDPOINT");
 var prices = await broker.GetTicks(cleaner, contract, DateTime.Now.AddDays(-5), DateTime.Now, "BID_ASK", 100);
 var options = await broker.GetContracts(cleaner, optionContract);
+var summary = await broker.GetAccountSummary(cleaner);
 var orders = await broker.GetOrders(cleaner);
-var positions = await broker.GetPositions(cleaner, "AccountNumber");
+var positions = await broker.GetPositions(cleaner, account);
+
+// Subscriptions
+
+var dataMessage = new DataStreamMessage
+{
+  DataTypes = [SubscriptionEnum.Price],
+  Contract = contract
+};
+
+var priceSub = broker.SubscribeToTicks(dataMessage, o => Console.WriteLine("Price: " + JsonSerializer.Serialize(o)));
+var accountSub = broker.SubscribeToAccounts(account, o => Console.WriteLine("Account: " + JsonSerializer.Serialize(o)));
+var positionSub = broker.SubscribeToPositions(account, o => Console.WriteLine("Position: " + JsonSerializer.Serialize(o)));
+
+//broker.SubscribeToOrders(o => Console.WriteLine("Order: " + JsonSerializer.Serialize(o)));
+
+// Orders
 
 var order = new Order
 {
   Action = "BUY",
   OrderType = "LMT",
   TotalQuantity = 1,
-  LmtPrice = prices.Last().PriceAsk,
+  LmtPrice = prices.Last().Last.Value,
 };
 
 var orderResponse = await broker.SendOrder(
@@ -63,14 +85,13 @@ var orderResponse = await broker.SendOrder(
   order.LmtPrice - 50,
   order.LmtPrice + 50);
 
-broker.OnPrice += price => Console.WriteLine(JsonSerializer.Serialize(price));
-
 var orderStatus = await broker.ClearOrder(cleaner, orderResponse.Last().OrderId);
-var subscriptionId = await broker.SubscribeToTicks(contract, "BID_ASK");
 
 Console.ReadKey();
 
-broker.Unsubscribe(subscriptionId);
+broker.Unsubscribe(priceSub);
+broker.UnsubscribeFromUpdates(accountSub);
+broker.UnsubscribeFromUpdates(positionSub);
 broker.Disconnect();
 
 ```
