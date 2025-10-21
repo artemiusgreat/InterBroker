@@ -489,7 +489,7 @@ namespace IBApi
           response.Theta = value(message.Theta, 0, short.MaxValue, null);
           response.Vega = value(message.Vega, 0, short.MaxValue, null);
 
-          action(response);
+          action(response.Clone() as ComputationMessage);
         }
       }
 
@@ -525,7 +525,7 @@ namespace IBApi
             return;
           }
 
-          action(response);
+          action(response.Clone() as PriceMessage);
         }
       }
 
@@ -548,7 +548,7 @@ namespace IBApi
             return;
           }
 
-          action(response);
+          action(response.Clone() as PriceMessage);
         }
       }
 
