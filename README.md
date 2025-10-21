@@ -63,10 +63,10 @@ var dataMessage = new DataStreamMessage
 };
 
 var priceSub = broker.SubscribeToTicks(dataMessage, o => Console.WriteLine("Price: " + JsonSerializer.Serialize(o)));
-var accountSub = broker.SubscribeToAccounts(account, o => Console.WriteLine("Account: " + JsonSerializer.Serialize(o)));
-var positionSub = broker.SubscribeToPositions(account, o => Console.WriteLine("Position: " + JsonSerializer.Serialize(o)));
 
-//broker.SubscribeToOrders(o => Console.WriteLine("Order: " + JsonSerializer.Serialize(o)));
+broker.SubscribeToAccounts(account, o => Console.WriteLine("Account: " + JsonSerializer.Serialize(o)));
+broker.SubscribeToPositions(account, o => Console.WriteLine("Position: " + JsonSerializer.Serialize(o)));
+broker.SubscribeToOrders(o => Console.WriteLine("Order: " + JsonSerializer.Serialize(o)));
 
 // Orders
 
@@ -90,8 +90,7 @@ var orderStatus = await broker.ClearOrder(cleaner, orderResponse.Last().OrderId)
 Console.ReadKey();
 
 broker.Unsubscribe(priceSub);
-broker.UnsubscribeFromUpdates(accountSub);
-broker.UnsubscribeFromUpdates(positionSub);
+broker.UnsubscribeFromUpdates(account);
 broker.Disconnect();
 
 ```

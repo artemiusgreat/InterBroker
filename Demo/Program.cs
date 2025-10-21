@@ -41,7 +41,7 @@ namespace Demo
 
       // Requests
 
-      var account = "DU9471614";
+      var account = "<AccountNumber>";
       var cleaner = CancellationToken.None;
       var contracts = await broker.GetContracts(cleaner, contract);
       var bars = await broker.GetBars(cleaner, contract, DateTime.Now, "1 D", "1 min", "MIDPOINT");
