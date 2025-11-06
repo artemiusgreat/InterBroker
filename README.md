@@ -11,7 +11,7 @@ A part of a trading framework [Terminal](https://github.com/Indemos/Terminal).
 
 # Nuget 
 
-`dotnet add package InterBroker --version 0.0.1`
+`dotnet add package InterBroker`
 
 # Usage 
 
