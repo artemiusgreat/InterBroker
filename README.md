@@ -1,6 +1,7 @@
 # IBKR TWS API wrapper
 
 Minimalistic async wrapper around IBKR TWS API for Interactive Brokers.
+A part of a trading framework [Terminal](https://github.com/Indemos/Terminal).
 
 # Status 
 
