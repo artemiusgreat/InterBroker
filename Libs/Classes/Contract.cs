@@ -133,7 +133,7 @@ namespace IBApi
      * @brief The legs of a combined contract definition
      * @sa ComboLeg
      */
-    public List<ComboLeg> ComboLegs { get; set; }
+    public List<ComboLeg> ComboLegs { get; set; } = new List<ComboLeg>();
 
     /**
      * @brief Delta and underlying price for Delta-Neutral combo orders.

@@ -9,7 +9,7 @@
   <PropertyGroup>
     <IsPackable>true</IsPackable>
     <GeneratePackageOnBuild>True</GeneratePackageOnBuild>
-    <Version>0.0.11</Version>
+    <Version>0.0.12</Version>
     <Description>Minimalistic async wrapper around IBKR TWS API for Interactive Brokers.</Description>
     <Authors>artemiusgreat</Authors>
     <Copyright>indemos.com</Copyright>

@@ -42,7 +42,7 @@ namespace Demo
       // Requests
 
       var account = "<AccountNumber>";
-      var cleaner = CancellationToken.None;
+      var cleaner = new CancellationTokenSource(TimeSpan.FromSeconds(5)).Token;
       var contracts = await broker.GetContracts(cleaner, contract);
       var bars = await broker.GetBars(cleaner, contract, DateTime.Now, "1 D", "1 min", "MIDPOINT");
       var prices = await broker.GetTicks(cleaner, contract, DateTime.Now.AddDays(-5), DateTime.Now, "BID_ASK", 100);
@@ -83,6 +83,40 @@ namespace Demo
         order.LmtPrice + 50);
 
       var orderStatus = await broker.ClearOrder(cleaner, orderResponse.Last().OrderId);
+
+      // Combo orders 
+
+      contract.SecType = "BAG";
+      contract.ComboLegs.Add(new()
+      {
+        ConId = 826895725, // E2DZ5-C6900
+        Ratio = 1,
+        Action = "SELL",
+        Exchange = "CME",
+      });
+
+      contract.ComboLegs.Add(new()
+      {
+        ConId = 826895994, // E2DZ5-C6800
+        Ratio = 1,
+        Action = "BUY",
+        Exchange = "CME",
+      });
+
+      var comboOrder = new Order
+      {
+        Action = "BUY",
+        OrderType = "LMT",
+        TotalQuantity = 1,
+        LmtPrice = 0.10,
+      };
+
+      var comboResponse = await broker.SendOrder(
+        cleaner,
+        contract,
+        comboOrder,
+        comboOrder.LmtPrice - 0.05,
+        comboOrder.LmtPrice + 0.05);
 
       Console.ReadKey();
 
