@@ -33,7 +33,7 @@ namespace IBApi
       Instance = new IBClient(signal);
       Instance.ClientSocket.eConnect(Host, Port, id);
 
-      var process = new Task(() =>
+      var process = new Thread(() =>
       {
         var reader = new EReader(Instance.ClientSocket, signal);
 
@@ -45,7 +45,7 @@ namespace IBApi
           reader.processMsgs();
         }
 
-      }, TaskCreationOptions.LongRunning);
+      });
 
       process.Start();
     }
