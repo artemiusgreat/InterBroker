@@ -15,7 +15,8 @@ namespace Demo
     {
       var broker = new InterBroker
       {
-        Port = 7497
+        Port = 7497,
+        Timeout = TimeSpan.FromSeconds(1)
       };
 
       var contract = new Contract

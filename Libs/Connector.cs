@@ -1,9 +1,6 @@
-using IBApi;
-using IBApi.Messages;
-using IBApi.protobuf;
 using IBApi.Enums;
+using IBApi.Messages;
 using System;
-using System.Collections;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
@@ -14,6 +11,8 @@ namespace IBApi
 {
   public class InterBroker
   {
+    protected EReaderSignal signal = new EReaderMonitorSignal();
+
     public virtual IBClient Instance { get; set; }
 
     public virtual int Port { get; set; } = 7497;
@@ -23,7 +22,7 @@ namespace IBApi
     public virtual string Host { get; set; } = "localhost";
 
     public virtual TimeSpan Span { get; set; } = TimeSpan.Zero;
-    public virtual TimeSpan Timeout { get; set; } = TimeSpan.FromSeconds(30);
+    public virtual TimeSpan Timeout { get; set; } = TimeSpan.FromSeconds(5);
 
     /// <summary>
     /// Connect
@@ -31,23 +30,24 @@ namespace IBApi
     /// <param name="id"></param>
     public virtual void Connect(int id = 0)
     {
-      var signal = new EReaderMonitorSignal();
-
       Instance = new IBClient(signal);
       Instance.ClientSocket.eConnect(Host, Port, id);
 
-      var reader = new EReader(Instance.ClientSocket, signal);
-      var process = new Thread(() =>
+      var process = new Task(() =>
       {
+        var reader = new EReader(Instance.ClientSocket, signal);
+
+        reader.Start();
+
         while (Instance.ClientSocket.IsConnected())
         {
           signal.waitForSignal();
           reader.processMsgs();
         }
-      });
+
+      }, TaskCreationOptions.LongRunning);
 
       process.Start();
-      reader.Start();
     }
 
     /// <summary>
