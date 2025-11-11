@@ -233,7 +233,8 @@ namespace IBApi
     /// Get orders
     /// </summary>
     /// <param name="cleaner"></param>
-    public virtual async Task<OpenOrderMessage[]> GetOrders(CancellationToken cleaner)
+    /// <param name="action"></param>
+    public virtual async Task<OpenOrderMessage[]> GetOrders(CancellationToken cleaner, Action<OrderStatusMessage> action)
     {
       var orders = new ConcurrentDictionary<string, OpenOrderMessage>();
       var source = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -252,6 +253,7 @@ namespace IBApi
 
       Instance.OpenOrder += subscribe;
       Instance.OpenOrderEnd += unsubscribe;
+      Instance.OrderStatus += action;
       Instance.ClientSocket.reqAllOpenOrders();
 
       await await Task.WhenAny(source.Task, Task.Delay(Timeout, cleaner).ContinueWith(o => unsubscribe()));
@@ -465,7 +467,7 @@ namespace IBApi
     /// </summary>
     /// <param name="query"></param>
     /// <param name="action"></param>
-    public virtual int SubscribeToComputations(DataStreamMessage query, Action<ComputationMessage> action)
+    public virtual int SubscribeToComputations(PriceStreamMessage query, Action<ComputationMessage> action)
     {
       var nextId = Id;
       var response = new ComputationMessage();
@@ -508,7 +510,7 @@ namespace IBApi
     /// </summary>
     /// <param name="query"></param>
     /// <param name="action"></param>
-    public virtual int SubscribeToTicks(DataStreamMessage query, Action<PriceMessage> action)
+    public virtual int SubscribeToTicks(PriceStreamMessage query, Action<PriceMessage> action)
     {
       var nextId = Id;
       var response = new PriceMessage();
@@ -564,6 +566,40 @@ namespace IBApi
     }
 
     /// <summary>
+    /// Subscribe to position updates
+    /// </summary>
+    /// <param name="query"></param>
+    /// <param name="action"></param>
+    public virtual int SubscribeToPositions(PositionStreamMessage query, Action<PositionStatusMessage> action)
+    {
+      var nextId = Id;
+
+      void subscribeToUpdates(PnLSingleMessage message)
+      {
+        if (Equals(nextId, message.ReqId))
+        {
+          var response = new PositionStatusMessage
+          {
+            Pos = message.Pos,
+            Value = message.Value,
+            ReqId = message.ReqId,
+            Symbol = query.Contract.LocalSymbol ?? query.Contract.Symbol,
+            DailyPnL = message.DailyPnL == double.MaxValue ? 0 : message.DailyPnL,
+            RealizedPnL = message.RealizedPnL == double.MaxValue ? 0 : message.RealizedPnL,
+            UnrealizedPnL = message.UnrealizedPnL == double.MaxValue ? 0 : message.UnrealizedPnL
+          };
+
+          action(response);
+        }
+      }
+
+      Instance.pnlSingle += subscribeToUpdates;
+      Instance.ClientSocket.reqPnLSingle(nextId, query.Account, null, query.Contract.ConId);
+
+      return nextId;
+    }
+
+    /// <summary>
     /// Continuous updates
     /// </summary>
     /// <param name="account"></param>
@@ -579,7 +615,7 @@ namespace IBApi
     /// </summary>
     /// <param name="account"></param>
     /// <param name="action"></param>
-    public virtual void SubscribeToPositions(string account, Action<UpdatePortfolioMessage> action)
+    public virtual void SubscribeToUpdates(string account, Action<UpdatePortfolioMessage> action)
     {
       Instance.UpdatePortfolio += action;
       Instance.ClientSocket.reqAccountUpdates(true, account);
@@ -601,6 +637,15 @@ namespace IBApi
     public virtual void UnsubscribeFromUpdates(string account)
     {
       Instance.ClientSocket.reqAccountUpdates(false, account);
+    }
+
+    /// <summary>
+    /// Unsubscribe from position updates
+    /// </summary>
+    /// <param name="id"></param>
+    public virtual void UnsubscribeFromPositions(int id)
+    {
+      Instance.ClientSocket.cancelPnLSingle(id);
     }
 
     /// <summary>

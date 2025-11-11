@@ -43,28 +43,35 @@ namespace Demo
       // Requests
 
       var account = "<AccountNumber>";
-      var cleaner = new CancellationTokenSource(TimeSpan.FromSeconds(5)).Token;
+      var cleaner = CancellationToken.None;
       var contracts = await broker.GetContracts(cleaner, contract);
       var bars = await broker.GetBars(cleaner, contract, DateTime.Now, "1 D", "1 min", "MIDPOINT");
       var prices = await broker.GetTicks(cleaner, contract, DateTime.Now.AddDays(-5), DateTime.Now, "BID_ASK", 100);
       var options = await broker.GetContracts(cleaner, optionContract);
       var summary = await broker.GetAccountSummary(cleaner);
-      var orders = await broker.GetOrders(cleaner);
+      var orders = await broker.GetOrders(cleaner, o => Console.WriteLine(JsonSerializer.Serialize(o)));
       var positions = await broker.GetPositions(cleaner, account);
 
       // Subscriptions
 
-      var dataMessage = new DataStreamMessage
+      var dataMessage = new PriceStreamMessage
       {
         DataTypes = [SubscriptionEnum.Price],
-        Contract = contract
+        Contract = contracts.Last().Contract,
+        Account = account
       };
 
-      var priceSub = broker.SubscribeToTicks(dataMessage, o => Console.WriteLine("Price: " + JsonSerializer.Serialize(o)));
+      var posMessage = new PositionStreamMessage
+      {
+        Contract = contracts.Last().Contract,
+        Account = account
+      };
 
-      broker.SubscribeToAccounts(account, o => Console.WriteLine("Account: " + JsonSerializer.Serialize(o)));
-      broker.SubscribeToPositions(account, o => Console.WriteLine("Position: " + JsonSerializer.Serialize(o)));
-      broker.SubscribeToOrders(o => Console.WriteLine("Order: " + JsonSerializer.Serialize(o)));
+      //broker.SubscribeToTicks(dataMessage, o => Console.WriteLine("Price: " + JsonSerializer.Serialize(o)));
+      //broker.SubscribeToPositions(posMessage, o => Console.WriteLine("Position: " + JsonSerializer.Serialize(o)));
+      //broker.SubscribeToAccounts(account, o => Console.WriteLine("Account: " + JsonSerializer.Serialize(o)));
+      //broker.SubscribeToUpdates(account, o => Console.WriteLine("Position: " + JsonSerializer.Serialize(o)));
+      //broker.SubscribeToOrders(o => Console.WriteLine("Order: " + JsonSerializer.Serialize(o)));
 
       // Orders
 
@@ -83,46 +90,44 @@ namespace Demo
         order.LmtPrice - 50,
         order.LmtPrice + 50);
 
-      var orderStatus = await broker.ClearOrder(cleaner, orderResponse.Last().OrderId);
+      //var orderStatus = await broker.ClearOrder(cleaner, orderResponse.Last().OrderId);
 
-      // Combo orders 
+      //// Combo orders 
 
-      contract.SecType = "BAG";
-      contract.ComboLegs.Add(new()
-      {
-        ConId = 826895725, // E2DZ5-C6900
-        Ratio = 1,
-        Action = "SELL",
-        Exchange = "CME",
-      });
+      //contract.SecType = "BAG";
+      //contract.ComboLegs.Add(new()
+      //{
+      //  ConId = 826895725, // E2DZ5-C6900
+      //  Ratio = 1,
+      //  Action = "SELL",
+      //  Exchange = "CME",
+      //});
 
-      contract.ComboLegs.Add(new()
-      {
-        ConId = 826895994, // E2DZ5-C6800
-        Ratio = 1,
-        Action = "BUY",
-        Exchange = "CME",
-      });
+      //contract.ComboLegs.Add(new()
+      //{
+      //  ConId = 826895994, // E2DZ5-C6800
+      //  Ratio = 1,
+      //  Action = "BUY",
+      //  Exchange = "CME",
+      //});
 
-      var comboOrder = new Order
-      {
-        Action = "BUY",
-        OrderType = "LMT",
-        TotalQuantity = 1,
-        LmtPrice = 0.10,
-      };
+      //var comboOrder = new Order
+      //{
+      //  Action = "BUY",
+      //  OrderType = "LMT",
+      //  TotalQuantity = 1,
+      //  LmtPrice = 0.10,
+      //};
 
-      var comboResponse = await broker.SendOrder(
-        cleaner,
-        contract,
-        comboOrder,
-        comboOrder.LmtPrice - 0.05,
-        comboOrder.LmtPrice + 0.05);
+      //var comboResponse = await broker.SendOrder(
+      //  cleaner,
+      //  contract,
+      //  comboOrder,
+      //  comboOrder.LmtPrice - 0.05,
+      //  comboOrder.LmtPrice + 0.05);
 
       Console.ReadKey();
 
-      broker.Unsubscribe(priceSub);
-      broker.UnsubscribeFromUpdates(account);
       broker.Disconnect();
     }
   }

@@ -5,12 +5,14 @@ namespace IBApi.Messages
 {
   public class PnLSingleMessage
   {
-    public int ReqId { get; private set; }
-    public decimal Pos { get; private set; }
-    public double DailyPnL { get; private set; }
-    public double Value { get; private set; }
-    public double UnrealizedPnL { get; private set; }
-    public double RealizedPnL { get; private set; }
+    public int ReqId { get; set; }
+    public decimal Pos { get; set; }
+    public double DailyPnL { get; set; }
+    public double Value { get; set; }
+    public double UnrealizedPnL { get; set; }
+    public double RealizedPnL { get; set; }
+
+    public PnLSingleMessage() { }
 
     public PnLSingleMessage(int reqId, decimal pos, double dailyPnL, double unrealizedPnL, double realizedPnL, double value)
     {
