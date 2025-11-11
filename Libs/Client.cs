@@ -224,10 +224,10 @@ namespace IBApi
     {
       var tmp = NextValidId;
 
+      NextOrderId = orderId;
+
       if (tmp != null)
         Run(t => tmp(new ConnectionStatusMessage(true)), null);
-
-      NextOrderId = orderId;
     }
 
     public event Action<int, DeltaNeutralContract> DeltaNeutralValidation;

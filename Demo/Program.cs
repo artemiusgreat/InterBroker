@@ -16,7 +16,7 @@ namespace Demo
       var broker = new InterBroker
       {
         Port = 7497,
-        Timeout = TimeSpan.FromSeconds(1)
+        Timeout = TimeSpan.FromSeconds(5)
       };
 
       var contract = new Contract
@@ -38,7 +38,7 @@ namespace Demo
         LastTradeDateOrContractMonth = "20251017"
       };
 
-      broker.Connect();
+      var id = await broker.Connect();
 
       // Requests
 

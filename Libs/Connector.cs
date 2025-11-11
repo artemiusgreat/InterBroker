@@ -11,8 +11,6 @@ namespace IBApi
 {
   public class InterBroker
   {
-    protected EReaderSignal signal = new EReaderMonitorSignal();
-
     public virtual IBClient Instance { get; set; }
 
     public virtual int Port { get; set; } = 7497;
@@ -28,26 +26,32 @@ namespace IBApi
     /// Connect
     /// </summary>
     /// <param name="id"></param>
-    public virtual void Connect(int id = 0)
+    public virtual async Task<int> Connect(int id = 0)
     {
+      var signal = new EReaderMonitorSignal();
+
       Instance = new IBClient(signal);
       Instance.ClientSocket.eConnect(Host, Port, id);
 
+      var reader = new EReader(Instance.ClientSocket, signal);
+      var source = new TaskCompletionSource<ConnectionStatusMessage>();
       var process = new Thread(() =>
       {
-        var reader = new EReader(Instance.ClientSocket, signal);
-
-        reader.Start();
-
         while (Instance.ClientSocket.IsConnected())
         {
           signal.waitForSignal();
           reader.processMsgs();
         }
-
       });
 
       process.Start();
+      reader.Start();
+
+      Instance.NextValidId += o => source.TrySetResult(o);
+
+      await await Task.WhenAny(source.Task, Task.Delay(Timeout));
+
+      return Instance.NextOrderId;
     }
 
     /// <summary>
@@ -434,12 +438,12 @@ namespace IBApi
     /// <param name="action"></param>
     public virtual void SubscribeToErrors(Action<long, int, int, string, string, Exception> action)
     {
-      Instance.Error += (id, stamp, code, message, error, e) =>
+      Instance.Error += async (id, stamp, code, message, error, e) =>
       {
         switch (true)
         {
           case true when Equals(code, (int)ClientErrorEnum.NoConnection):
-          case true when Equals(code, (int)ClientErrorEnum.ConnectionError): Connect(); break;
+          case true when Equals(code, (int)ClientErrorEnum.ConnectionError): await Connect(); break;
         }
 
         action(stamp, id, code, message, error, e);
