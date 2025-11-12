@@ -233,8 +233,7 @@ namespace IBApi
     /// Get orders
     /// </summary>
     /// <param name="cleaner"></param>
-    /// <param name="action"></param>
-    public virtual async Task<OpenOrderMessage[]> GetOrders(CancellationToken cleaner, Action<OrderStatusMessage> action)
+    public virtual async Task<OpenOrderMessage[]> GetOrders(CancellationToken cleaner)
     {
       var orders = new ConcurrentDictionary<string, OpenOrderMessage>();
       var source = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -253,7 +252,6 @@ namespace IBApi
 
       Instance.OpenOrder += subscribe;
       Instance.OpenOrderEnd += unsubscribe;
-      Instance.OrderStatus += action;
       Instance.ClientSocket.reqAllOpenOrders();
 
       await await Task.WhenAny(source.Task, Task.Delay(Timeout, cleaner).ContinueWith(o => unsubscribe()));
@@ -600,6 +598,15 @@ namespace IBApi
     }
 
     /// <summary>
+    /// Subscribe to order changes
+    /// </summary>
+    /// <param name="action"></param>
+    public virtual void SubscribeToOrderStatuses(Action<OrderStatusMessage> action)
+    {
+      Instance.OrderStatus += action;
+    }
+
+    /// <summary>
     /// Continuous updates
     /// </summary>
     /// <param name="account"></param>
@@ -646,6 +653,15 @@ namespace IBApi
     public virtual void UnsubscribeFromPositions(int id)
     {
       Instance.ClientSocket.cancelPnLSingle(id);
+    }
+
+    /// <summary>
+    /// Subscribe to order changes
+    /// </summary>
+    /// <param name="action"></param>
+    public virtual void UnsubscribeToOrderStatuses(Action<OrderStatusMessage> action)
+    {
+      Instance.OrderStatus -= action;
     }
 
     /// <summary>

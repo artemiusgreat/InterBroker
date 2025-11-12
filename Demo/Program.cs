@@ -49,7 +49,7 @@ namespace Demo
       var prices = await broker.GetTicks(cleaner, contract, DateTime.Now.AddDays(-5), DateTime.Now, "BID_ASK", 100);
       var options = await broker.GetContracts(cleaner, optionContract);
       var summary = await broker.GetAccountSummary(cleaner);
-      var orders = await broker.GetOrders(cleaner, o => Console.WriteLine(JsonSerializer.Serialize(o)));
+      var orders = await broker.GetOrders(cleaner);
       var positions = await broker.GetPositions(cleaner, account);
 
       // Subscriptions
