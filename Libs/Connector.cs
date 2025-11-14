@@ -32,6 +32,7 @@ namespace IBApi
 
       Instance = new IBClient(signal);
       Instance.ClientSocket.eConnect(Host, Port, id);
+      Instance.ClientSocket.SetConnectOptions("+PACEAPI");
 
       var reader = new EReader(Instance.ClientSocket, signal);
       var source = new TaskCompletionSource<ConnectionStatusMessage>();
@@ -579,9 +580,22 @@ namespace IBApi
     /// Subscribe orders
     /// </summary>
     /// <param name="action"></param>
-    public virtual void SubscribeToOrders(Action<OpenOrderMessage> action)
+    public virtual void SubscribeToOrders(Action<IList<OpenOrderMessage>> action)
     {
-      Instance.OpenOrder += action;
+      var orders = new ConcurrentDictionary<string, OpenOrderMessage>();
+
+      void subscribe(OpenOrderMessage message)
+      {
+        orders[$"{message.Order.PermId}"] = message;
+      }
+
+      void end()
+      {
+        action(orders.Values.ToArray());
+      }
+
+      Instance.OpenOrder += subscribe;
+      Instance.OpenOrderEnd += end;
       Instance.ClientSocket.reqAllOpenOrders();
       Instance.ClientSocket.reqAutoOpenOrders(true);
     }
