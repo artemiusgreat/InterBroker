@@ -451,16 +451,6 @@ namespace IBApi
     }
 
     /// <summary>
-    /// Subscribe orders
-    /// </summary>
-    /// <param name="action"></param>
-    public virtual void SubscribeToOrders(Action<OpenOrderMessage> action)
-    {
-      Instance.OpenOrder += o => action(o);
-      Instance.ClientSocket.reqAutoOpenOrders(true);
-    }
-
-    /// <summary>
     /// Subscribe to computations
     /// </summary>
     /// <param name="query"></param>
@@ -564,11 +554,44 @@ namespace IBApi
     }
 
     /// <summary>
+    /// Continuous updates
+    /// </summary>
+    /// <param name="account"></param>
+    /// <param name="action"></param>
+    public virtual void SubscribeToAccount(string account, Action<AccountValueMessage> action)
+    {
+      Instance.UpdateAccountValue += action;
+      Instance.ClientSocket.reqAccountUpdates(true, account);
+    }
+
+    /// <summary>
+    /// Subscribe to order changes
+    /// </summary>
+    /// <param name="action"></param>
+    public virtual void SubscribeToOrderStatus(Action<OrderStatusMessage> action)
+    {
+      Instance.OrderStatus += action;
+      Instance.ClientSocket.reqAllOpenOrders();
+      Instance.ClientSocket.reqAutoOpenOrders(true);
+    }
+
+    /// <summary>
+    /// Subscribe orders
+    /// </summary>
+    /// <param name="action"></param>
+    public virtual void SubscribeToOrders(Action<OpenOrderMessage> action)
+    {
+      Instance.OpenOrder += action;
+      Instance.ClientSocket.reqAllOpenOrders();
+      Instance.ClientSocket.reqAutoOpenOrders(true);
+    }
+
+    /// <summary>
     /// Subscribe to position updates
     /// </summary>
     /// <param name="query"></param>
     /// <param name="action"></param>
-    public virtual int SubscribeToPositions(PositionStreamMessage query, Action<PositionStatusMessage> action)
+    public virtual int SubscribeToPositionStatus(PositionStreamMessage query, Action<PositionStatusMessage> action)
     {
       var nextId = Id;
 
@@ -598,31 +621,11 @@ namespace IBApi
     }
 
     /// <summary>
-    /// Subscribe to order changes
-    /// </summary>
-    /// <param name="action"></param>
-    public virtual void SubscribeToOrderStatuses(Action<OrderStatusMessage> action)
-    {
-      Instance.OrderStatus += action;
-    }
-
-    /// <summary>
     /// Continuous updates
     /// </summary>
     /// <param name="account"></param>
     /// <param name="action"></param>
-    public virtual void SubscribeToAccounts(string account, Action<AccountValueMessage> action)
-    {
-      Instance.UpdateAccountValue += action;
-      Instance.ClientSocket.reqAccountUpdates(true, account);
-    }
-
-    /// <summary>
-    /// Continuous updates
-    /// </summary>
-    /// <param name="account"></param>
-    /// <param name="action"></param>
-    public virtual void SubscribeToUpdates(string account, Action<UpdatePortfolioMessage> action)
+    public virtual void SubscribeToPositions(string account, Action<UpdatePortfolioMessage> action)
     {
       Instance.UpdatePortfolio += action;
       Instance.ClientSocket.reqAccountUpdates(true, account);
@@ -641,7 +644,7 @@ namespace IBApi
     /// Unsubscribe from account updates
     /// </summary>
     /// <param name="account"></param>
-    public virtual void UnsubscribeFromUpdates(string account)
+    public virtual void UnsubscribeFromPositions(string account)
     {
       Instance.ClientSocket.reqAccountUpdates(false, account);
     }
@@ -650,7 +653,7 @@ namespace IBApi
     /// Unsubscribe from position updates
     /// </summary>
     /// <param name="id"></param>
-    public virtual void UnsubscribeFromPositions(int id)
+    public virtual void UnsubscribeFromPositionStatus(int id)
     {
       Instance.ClientSocket.cancelPnLSingle(id);
     }
@@ -659,7 +662,7 @@ namespace IBApi
     /// Subscribe to order changes
     /// </summary>
     /// <param name="action"></param>
-    public virtual void UnsubscribeToOrderStatuses(Action<OrderStatusMessage> action)
+    public virtual void UnsubscribeToOrderStatus(Action<OrderStatusMessage> action)
     {
       Instance.OrderStatus -= action;
     }
