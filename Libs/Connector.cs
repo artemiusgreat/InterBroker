@@ -342,22 +342,18 @@ namespace IBApi
     /// </summary>
     /// <param name="cleaner"></param>
     /// <param name="contract"></param>
-    /// <param name="orderMessage"></param>
+    /// <param name="sourceOrder"></param>
     /// <param name="stopPrice"></param>
     /// <param name="takePrice"></param>
-    public virtual async Task<IList<OpenOrderMessage>> SendOrder(CancellationToken cleaner, Contract contract, Order orderMessage, double? stopPrice = null, double? takePrice = null)
+    public virtual async Task<IList<OpenOrderMessage>> SendOrder(CancellationToken cleaner, Contract contract, Order sourceOrder, double? stopPrice = null, double? takePrice = null)
     {
+      sourceOrder.OrderId = Instance.NextOrderId;
+
       var states = new List<Task>();
-      var orderId = Instance.NextOrderId;
       var response = new Dictionary<int, OpenOrderMessage>();
-      var orders = CreateOrder(orderMessage, stopPrice, takePrice);
+      var orderGroup = CreateOrderGroup(sourceOrder, stopPrice, takePrice);
 
-      foreach (var order in orders.Where(o => o.Transmit is false))
-      {
-        Instance.ClientSocket.placeOrder(order.OrderId, contract, order);
-      }
-
-      foreach (var order in orders.Where(o => o.Transmit))
+      foreach (var order in orderGroup.Where(o => o.Transmit))
       {
         var source = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
 
@@ -386,6 +382,11 @@ namespace IBApi
 
       await await Task.WhenAny(Task.WhenAll(states), Task.Delay(Timeout, cleaner));
       await Task.Delay(Span);
+
+      foreach (var order in orderGroup.Where(o => o.Transmit is false))
+      {
+        Instance.ClientSocket.placeOrder(order.OrderId, contract, order);
+      }
 
       return response.Values.ToArray();
     }
@@ -687,7 +688,7 @@ namespace IBApi
     /// <param name="order"></param>
     /// <param name="stopPrice"></param>
     /// <param name="takePrice"></param>
-    protected virtual IList<Order> CreateOrder(Order order, double? stopPrice = null, double? takePrice = null)
+    protected virtual IList<Order> CreateOrderGroup(Order order, double? stopPrice = null, double? takePrice = null)
     {
       var orders = new List<Order>();
 
@@ -724,7 +725,6 @@ namespace IBApi
       }
 
       order.Transmit = true;
-      order.OrderId = Instance.NextOrderId;
       orders.Add(order);
 
       return orders;
