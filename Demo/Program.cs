@@ -74,20 +74,24 @@ namespace Demo
 
       // Orders
 
-      var order = new Order
+      for (var i = 0; i < 5; i++)
       {
-        Action = "BUY",
-        OrderType = "LMT",
-        TotalQuantity = 1,
-        LmtPrice = prices.Last().Last.Value,
-      };
+        var order = new Order
+        {
+          Action = "BUY",
+          OrderType = "LMT",
+          TotalQuantity = 1,
+          LmtPrice = prices.Last().Last.Value,
+        };
 
-      var orderResponse = await broker.SendOrder(
-        cleaner,
-        contracts.Last().Contract,
-        order,
-        order.LmtPrice - 50,
-        order.LmtPrice + 50);
+        var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        var orderResponse = await broker.SendOrder(
+          cts.Token,
+          contracts.Last().Contract,
+          order,
+          order.LmtPrice - 50,
+          order.LmtPrice + 50);
+      }
 
       //var orderStatus = await broker.ClearOrder(cleaner, orderResponse.Last().OrderId);
 

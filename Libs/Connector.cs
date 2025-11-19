@@ -14,8 +14,10 @@ namespace IBApi
     public virtual IBClient Instance { get; set; }
 
     public virtual int Port { get; set; } = 7497;
-    public virtual int Range { get; set; } = short.MaxValue;
+    public virtual int Range { get; set; } = 1;
+    public virtual int OrderRange { get; set; } = short.MaxValue;
     public virtual int Id => Instance.NextOrderId + Range++;
+    public virtual int OrderId => Instance.NextOrderId + OrderRange++;
 
     public virtual string Host { get; set; } = "localhost";
 
@@ -347,11 +349,11 @@ namespace IBApi
     /// <param name="takePrice"></param>
     public virtual async Task<IList<OpenOrderMessage>> SendOrder(CancellationToken cleaner, Contract contract, Order sourceOrder, double? stopPrice = null, double? takePrice = null)
     {
-      sourceOrder.OrderId = Instance.NextOrderId;
-
       var states = new List<Task>();
       var response = new Dictionary<int, OpenOrderMessage>();
       var orderGroup = CreateOrderGroup(sourceOrder, stopPrice, takePrice);
+
+      Console.WriteLine("############# Orders: " + string.Join(",", orderGroup.Select(o => o.OrderId)));
 
       foreach (var order in orderGroup.Where(o => o.Transmit))
       {
@@ -359,6 +361,8 @@ namespace IBApi
 
         void subscribe(OpenOrderMessage message)
         {
+          Console.WriteLine((order.OrderId == message.OrderId) + " : " + order.OrderId + " == " + message.OrderId);
+
           if (Equals(order.OrderId, message.OrderId))
           {
             response[message.OrderId] = message;
@@ -692,12 +696,17 @@ namespace IBApi
     {
       var orders = new List<Order>();
 
+      order.Transmit = true;
+      order.OrderId = OrderId;
+      orders.Add(order);
+
+
       if (takePrice != null)
       {
         var TP = new Order
         {
           OrderType = "LMT",
-          OrderId = order.OrderId + 1,
+          OrderId = OrderId,
           Action = order?.Action == "BUY" ? "SELL" : "BUY",
           TotalQuantity = order.TotalQuantity,
           LmtPrice = takePrice.Value,
@@ -713,7 +722,7 @@ namespace IBApi
         var SL = new Order
         {
           OrderType = "STP",
-          OrderId = order.OrderId + 2,
+          OrderId = OrderId,
           Action = order?.Action == "BUY" ? "SELL" : "BUY",
           TotalQuantity = order.TotalQuantity,
           AuxPrice = stopPrice.Value,
@@ -723,9 +732,6 @@ namespace IBApi
 
         orders.Add(SL);
       }
-
-      order.Transmit = true;
-      orders.Add(order);
 
       return orders;
     }
