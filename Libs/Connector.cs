@@ -353,16 +353,12 @@ namespace IBApi
       var response = new Dictionary<int, OpenOrderMessage>();
       var orderGroup = CreateOrderGroup(sourceOrder, stopPrice, takePrice);
 
-      Console.WriteLine("############# Orders: " + string.Join(",", orderGroup.Select(o => o.OrderId)));
-
       foreach (var order in orderGroup.Where(o => o.Transmit))
       {
         var source = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
 
         void subscribe(OpenOrderMessage message)
         {
-          Console.WriteLine((order.OrderId == message.OrderId) + " : " + order.OrderId + " == " + message.OrderId);
-
           if (Equals(order.OrderId, message.OrderId))
           {
             response[message.OrderId] = message;
@@ -398,18 +394,14 @@ namespace IBApi
     /// <summary>
     /// Cancel order
     /// </summary>
-    /// <param name="cleaner"></param>
     /// <param name="orderId"></param>
-    public virtual async Task<OrderStatusMessage> ClearOrder(CancellationToken cleaner, int orderId)
+    public virtual void ClearOrder(int orderId, Action<OrderStatusMessage> action = null)
     {
-      var source = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
-      var response = null as OrderStatusMessage;
-
       void subscribe(OrderStatusMessage message)
       {
-        if (Equals(orderId, message.OrderId))
+        if (Equals(orderId, message.OrderId) && action != null)
         {
-          response = message;
+          action(message);
           unsubscribe();
         }
       }
@@ -417,16 +409,14 @@ namespace IBApi
       void unsubscribe()
       {
         Instance.OrderStatus -= subscribe;
-        source.TrySetResult(true);
       }
 
-      Instance.OrderStatus += subscribe;
-      Instance.ClientSocket.cancelOrder(orderId, new OrderCancel());
+      if (action != null)
+      {
+        Instance.OrderStatus += subscribe;
+      }
 
-      await await Task.WhenAny(source.Task, Task.Delay(Timeout, cleaner).ContinueWith(o => unsubscribe()));
-      await Task.Delay(Span);
-
-      return response;
+      Instance.ClientSocket.cancelOrder(orderId, null);
     }
 
     /// <summary>
