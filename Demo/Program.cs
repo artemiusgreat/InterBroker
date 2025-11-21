@@ -74,24 +74,34 @@ namespace Demo
 
       // Orders
 
-      //for (var i = 0; i < 5; i++)
-      //{
-      //  var order = new Order
-      //  {
-      //    Action = "BUY",
-      //    OrderType = "LMT",
-      //    TotalQuantity = 1,
-      //    LmtPrice = prices.Last().Last.Value,
-      //  };
+      for (var i = 0; i < 5; i++)
+      {
+        orders = await broker.GetOrders(cleaner);
+        positions = [.. (await broker.GetPositions(cleaner, account)).Where(o => o.Position is not 0)];
 
-      //  var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
-      //  var orderResponse = await broker.SendOrder(
-      //    cts.Token,
-      //    contracts.Last().Contract,
-      //    order,
-      //    order.LmtPrice - 50,
-      //    order.LmtPrice + 50);
-      //}
+        Console.WriteLine($"Iteration {i} => Orders: {orders.Length}, Positions: {positions.Length}");
+
+        if (orders.Length is not 0)
+        {
+          //return;
+        }
+
+        var order = new Order
+        {
+          Action = "BUY",
+          OrderType = "LMT",
+          TotalQuantity = 1,
+          LmtPrice = prices.Last().Last.Value,
+        };
+
+        var orderResponse = broker.SendOrder(
+          contracts.Last().Contract,
+          order,
+          order.LmtPrice - 50,
+          order.LmtPrice + 50);
+
+        Console.WriteLine($"Order {i} => {order.OrderId}");
+      }
 
       broker.ClearOrder((int)orders.Last().Order.PermId);
 

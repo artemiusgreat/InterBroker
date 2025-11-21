@@ -1,3 +1,4 @@
+using Google.Protobuf;
 using IBApi.Enums;
 using IBApi.Messages;
 using System;
@@ -342,27 +343,30 @@ namespace IBApi
     /// <summary>
     /// Send order
     /// </summary>
-    /// <param name="cleaner"></param>
     /// <param name="contract"></param>
     /// <param name="sourceOrder"></param>
     /// <param name="stopPrice"></param>
     /// <param name="takePrice"></param>
-    public virtual async Task<IList<OpenOrderMessage>> SendOrder(CancellationToken cleaner, Contract contract, Order sourceOrder, double? stopPrice = null, double? takePrice = null)
+    /// <param name="action"></param>
+    public virtual IList<Order> SendOrder(Contract contract, Order sourceOrder, double? stopPrice = null, double? takePrice = null, Action<Dictionary<int, OpenOrderMessage>> action = null)
     {
       var states = new List<Task>();
       var response = new Dictionary<int, OpenOrderMessage>();
       var orderGroup = CreateOrderGroup(sourceOrder, stopPrice, takePrice);
 
-      foreach (var order in orderGroup.Where(o => o.Transmit))
+      foreach (var order in orderGroup)
       {
-        var source = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
-
         void subscribe(OpenOrderMessage message)
         {
           if (Equals(order.OrderId, message.OrderId))
           {
             response[message.OrderId] = message;
             unsubscribe();
+
+            if (Equals(response.Count, orderGroup.Count))
+            {
+              action(response);
+            }
           }
         }
 
@@ -370,31 +374,21 @@ namespace IBApi
         {
           Instance.OpenOrder -= subscribe;
           Instance.OpenOrderEnd -= unsubscribe;
-          source.TrySetResult(true);
         }
 
         Instance.OpenOrder += subscribe;
         Instance.OpenOrderEnd += unsubscribe;
         Instance.ClientSocket.placeOrder(order.OrderId, contract, order);
-
-        states.Add(source.Task);
       }
 
-      await await Task.WhenAny(Task.WhenAll(states), Task.Delay(Timeout, cleaner));
-      await Task.Delay(Span);
-
-      foreach (var order in orderGroup.Where(o => o.Transmit is false))
-      {
-        Instance.ClientSocket.placeOrder(order.OrderId, contract, order);
-      }
-
-      return response.Values.ToArray();
+      return orderGroup;
     }
 
     /// <summary>
     /// Cancel order
     /// </summary>
     /// <param name="orderId"></param>
+    /// <param name="action"></param>
     public virtual void ClearOrder(int orderId, Action<OrderStatusMessage> action = null)
     {
       void subscribe(OrderStatusMessage message)
@@ -686,11 +680,6 @@ namespace IBApi
     {
       var orders = new List<Order>();
 
-      order.Transmit = true;
-      order.OrderId = OrderId;
-      orders.Add(order);
-
-
       if (takePrice != null)
       {
         var TP = new Order
@@ -722,6 +711,10 @@ namespace IBApi
 
         orders.Add(SL);
       }
+
+      order.Transmit = true;
+      order.OrderId = OrderId;
+      orders.Add(order);
 
       return orders;
     }
