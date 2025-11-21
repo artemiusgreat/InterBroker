@@ -348,7 +348,7 @@ namespace IBApi
     /// <param name="stopPrice"></param>
     /// <param name="takePrice"></param>
     /// <param name="action"></param>
-    public virtual IList<Order> SendOrder(Contract contract, Order sourceOrder, double? stopPrice = null, double? takePrice = null, Action<Dictionary<int, OpenOrderMessage>> action = null)
+    public virtual (Order, IList<Order>) SendOrder(Contract contract, Order sourceOrder, double? stopPrice = null, double? takePrice = null, Action<Dictionary<int, OpenOrderMessage>> action = null)
     {
       var states = new List<Task>();
       var response = new Dictionary<int, OpenOrderMessage>();
@@ -381,7 +381,7 @@ namespace IBApi
         Instance.ClientSocket.placeOrder(order.OrderId, contract, order);
       }
 
-      return orderGroup;
+      return (orderGroup.Last(), orderGroup.Take(orderGroup.Count - 1).ToArray());
     }
 
     /// <summary>
