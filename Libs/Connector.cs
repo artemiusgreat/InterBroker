@@ -363,7 +363,7 @@ namespace IBApi
             response[message.OrderId] = message;
             unsubscribe();
 
-            if (Equals(response.Count, orderGroup.Count))
+            if (Equals(response.Count, orderGroup.Count) && action != null)
             {
               action(response);
             }
