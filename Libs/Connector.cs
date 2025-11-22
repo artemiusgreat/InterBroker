@@ -1,6 +1,6 @@
-using Google.Protobuf;
 using IBApi.Enums;
 using IBApi.Messages;
+using IBApi.Queries;
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
@@ -69,9 +69,7 @@ namespace IBApi
     /// <summary>
     /// Get contract definition
     /// </summary>
-    /// <param name="cleaner"></param>
-    /// <param name="contract"></param>
-    public virtual async Task<List<ContractDetails>> GetContracts(CancellationToken cleaner, Contract contract)
+    public virtual async Task<List<ContractDetails>> GetContracts(Contract contract, CancellationToken cancellationToken = default)
     {
       var nextId = Id;
       var response = new List<ContractDetails>();
@@ -96,8 +94,8 @@ namespace IBApi
       Instance.ContractDetailsEnd += unsubscribe;
       Instance.ClientSocket.reqContractDetails(nextId, contract);
 
-      await await Task.WhenAny(source.Task, Task.Delay(Timeout, cleaner).ContinueWith(o => unsubscribe(nextId)));
-      await Task.Delay(Span);
+      await await Task.WhenAny(source.Task, Task.Delay(Timeout, cancellationToken).ContinueWith(o => unsubscribe(nextId)));
+      await Task.Delay(Span, cancellationToken);
 
       return response;
     }
@@ -105,14 +103,7 @@ namespace IBApi
     /// <summary>
     /// Get historical ticks
     /// </summary>
-    /// <param name="cleaner"></param>
-    /// <param name="contract"></param>
-    /// <param name="minDate"></param>
-    /// <param name="maxDate"></param>
-    /// <param name="dataType"></param>
-    /// <param name="count"></param>
-    /// <param name="session"></param>
-    public virtual async Task<IList<PriceMessage>> GetTicks(CancellationToken cleaner, Contract contract, DateTime minDate, DateTime maxDate, string dataType, int count = 1, int session = 0)
+    public virtual async Task<IList<PriceMessage>> GetTicks(HistoricalTicksQuery request, CancellationToken cancellationToken = default)
     {
       var nextId = Id;
       var items = new List<PriceMessage>();
@@ -174,17 +165,17 @@ namespace IBApi
         }
       }
 
-      var minDateStr = minDate.ToString($"yyyyMMdd-HH:mm:ss");
-      var maxDateStr = maxDate.ToString($"yyyyMMdd-HH:mm:ss");
+      var minDateStr = request.MinDate.ToString($"yyyyMMdd-HH:mm:ss");
+      var maxDateStr = request.MaxDate.ToString($"yyyyMMdd-HH:mm:ss");
 
       Instance.historicalTick += subscribeToTicks;
       Instance.historicalTickLast += subscribeToPrices;
       Instance.historicalTickBidAsk += subscribeToRanges;
       Instance.historicalTickEnd += unsubscribe;
-      Instance.ClientSocket.reqHistoricalTicks(nextId, contract, minDateStr, maxDateStr, count, dataType, session, false, null);
+      Instance.ClientSocket.reqHistoricalTicks(nextId, request.Contract, minDateStr, maxDateStr, request.Count, request.DataType, request.Session, false, null);
 
-      await await Task.WhenAny(source.Task, Task.Delay(Timeout, cleaner).ContinueWith(o => unsubscribe(nextId)));
-      await Task.Delay(Span);
+      await await Task.WhenAny(source.Task, Task.Delay(Timeout, cancellationToken).ContinueWith(o => unsubscribe(nextId)));
+      await Task.Delay(Span, cancellationToken);
 
       return items;
     }
@@ -192,14 +183,7 @@ namespace IBApi
     /// <summary>
     /// Get historical bars
     /// </summary>
-    /// <param name="cleaner"></param>
-    /// <param name="contract"></param>
-    /// <param name="maxDate"></param>
-    /// <param name="duration"></param>
-    /// <param name="barType"></param>
-    /// <param name="dataType"></param>
-    /// <param name="session"></param>
-    public virtual async Task<IList<HistoricalDataMessage>> GetBars(CancellationToken cleaner, Contract contract, DateTime maxDate, string duration, string barType, string dataType, int session = 0)
+    public virtual async Task<IList<HistoricalDataMessage>> GetBars(HistoricalBarsQuery request, CancellationToken cancellationToken = default)
     {
       var nextId = Id;
       var items = new List<HistoricalDataMessage>();
@@ -221,14 +205,14 @@ namespace IBApi
         source.TrySetResult(true);
       }
 
-      var maxDateStr = maxDate.ToString($"yyyyMMdd-HH:mm:ss");
+      var maxDateStr = request.MaxDate.ToString($"yyyyMMdd-HH:mm:ss");
 
       Instance.HistoricalData += subscribe;
       Instance.HistoricalDataEnd += unsubscribe;
-      Instance.ClientSocket.reqHistoricalData(nextId, contract, maxDateStr, duration, barType, dataType, session, 1, false, null);
+      Instance.ClientSocket.reqHistoricalData(nextId, request.Contract, maxDateStr, request.Duration, request.BarType, request.DataType, request.Session, 1, false, null);
 
-      await await Task.WhenAny(source.Task, Task.Delay(Timeout, cleaner).ContinueWith(o => unsubscribe(null)));
-      await Task.Delay(Span);
+      await await Task.WhenAny(source.Task, Task.Delay(Timeout, cancellationToken).ContinueWith(o => unsubscribe(null)));
+      await Task.Delay(Span, cancellationToken);
 
       return items;
     }
@@ -237,7 +221,7 @@ namespace IBApi
     /// Get orders
     /// </summary>
     /// <param name="cleaner"></param>
-    public virtual async Task<OpenOrderMessage[]> GetOrders(CancellationToken cleaner)
+    public virtual async Task<OpenOrderMessage[]> GetOrders(CancellationToken cleaner = default)
     {
       var orders = new ConcurrentDictionary<string, OpenOrderMessage>();
       var source = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -267,9 +251,9 @@ namespace IBApi
     /// <summary>
     /// Get positions 
     /// </summary>
-    /// <param name="cleaner"></param>
     /// <param name="account"></param>
-    public virtual async Task<PositionMultiMessage[]> GetPositions(CancellationToken cleaner, string account)
+    /// <param name="cleaner"></param>
+    public virtual async Task<PositionMultiMessage[]> GetPositions(string account, CancellationToken cleaner = default)
     {
       var nextId = Id;
       var positions = new ConcurrentDictionary<string, PositionMultiMessage>();
@@ -307,9 +291,9 @@ namespace IBApi
     /// <summary>
     /// Get positions 
     /// </summary>
-    /// <param name="cleaner"></param>
     /// <param name="criteria"></param>
-    public virtual async Task<ExecutionMessage[]> GetTransactions(CancellationToken cleaner, ExecutionFilter criteria = null)
+    /// <param name="cleaner"></param>
+    public virtual async Task<ExecutionMessage[]> GetTransactions(ExecutionFilter criteria = null, CancellationToken cleaner = default)
     {
       var nextId = Id;
       var actions = new List<ExecutionMessage>();
@@ -348,7 +332,7 @@ namespace IBApi
     /// Sync open balance, order, and positions 
     /// </summary>
     /// <param name="cleaner"></param>
-    public virtual async Task<Dictionary<string, string>> GetAccountSummary(CancellationToken cleaner)
+    public virtual async Task<Dictionary<string, string>> GetAccountSummary(CancellationToken cleaner = default)
     {
       var nextId = Id;
       var response = new Dictionary<string, string>();
@@ -588,7 +572,7 @@ namespace IBApi
     /// </summary>
     /// <param name="account"></param>
     /// <param name="action"></param>
-    public virtual void SubscribeToAccount(string account, Action<AccountValueMessage> action)
+    public virtual void SubscribeToAccounts(string account, Action<AccountValueMessage> action)
     {
       Instance.UpdateAccountValue += action;
       Instance.ClientSocket.reqAccountUpdates(true, account);
