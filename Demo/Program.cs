@@ -3,8 +3,10 @@ using IBApi.Enums;
 using IBApi.Messages;
 using System;
 using System.Linq;
+using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
+using System.Timers;
 
 namespace Demo
 {
@@ -50,6 +52,7 @@ namespace Demo
       //var summary = await broker.GetAccountSummary(cleaner);
       var orders = await broker.GetOrders(cleaner);
       var positions = await broker.GetPositions(cleaner, account);
+      var executions = await broker.GetTransactions(cleaner);
 
       // Subscriptions
 
@@ -66,20 +69,24 @@ namespace Demo
         Account = account
       };
 
-      //broker.SubscribeToTicks(dataMessage, o => Console.WriteLine("Price: " + JsonSerializer.Serialize(o)));
       //broker.SubscribeToPositions(posMessage, o => Console.WriteLine("\n\n Position: " + JsonSerializer.Serialize(o)));
       //broker.SubscribeToAccounts(account, o => Console.WriteLine("Account: " + JsonSerializer.Serialize(o)));
       //broker.SubscribeToPositions(account, o => Console.WriteLine("Position: " + JsonSerializer.Serialize(o)));
       //broker.SubscribeToOrders(o => Console.WriteLine("\n\n Order: " + JsonSerializer.Serialize(o)));
 
-      // Orders
+      var counter = 0;
+      var stamp = DateTime.Now;
 
-      for (var i = 0; i < 5; i++)
+      broker.SubscribeToTicks(dataMessage, async o =>
       {
+        Console.WriteLine(stamp + " : " + (counter++));
+
+        //Console.WriteLine("Price: " + JsonSerializer.Serialize(o));
+
         orders = await broker.GetOrders(cleaner);
         positions = [.. (await broker.GetPositions(cleaner, account)).Where(o => o.Position is not 0)];
 
-        Console.WriteLine($"Iteration {i} => Orders: {orders.Length}, Positions: {positions.Length}");
+        Console.WriteLine($"Orders: {orders.Length}, Positions: {positions.Length}");
 
         if (orders.Length is not 0)
         {
@@ -89,9 +96,8 @@ namespace Demo
         var order = new Order
         {
           Action = "BUY",
-          OrderType = "LMT",
+          OrderType = "MKT",
           TotalQuantity = 1,
-          LmtPrice = prices.Last().Last.Value,
         };
 
         var orderResponse = broker.SendOrder(
@@ -100,10 +106,40 @@ namespace Demo
           order.LmtPrice - 50,
           order.LmtPrice + 50);
 
-        Console.WriteLine($"Order {i} => {order.OrderId}");
-      }
+        Console.WriteLine($"Order => {order.OrderId}");
 
-      broker.ClearOrder((int)orders.Last().Order.PermId);
+        broker.ClearOrder(orderResponse.Item1.OrderId);
+      });
+
+      // Orders
+
+      //orders = await broker.GetOrders(cleaner);
+      //positions = [.. (await broker.GetPositions(cleaner, account)).Where(o => o.Position is not 0)];
+
+      //Console.WriteLine($"Iteration {i} => Orders: {orders.Length}, Positions: {positions.Length}");
+
+      //if (orders.Length is not 0)
+      //{
+      //  //return;
+      //}
+
+      //var order = new Order
+      //{
+      //  Action = "BUY",
+      //  OrderType = "LMT",
+      //  TotalQuantity = 1,
+      //  LmtPrice = prices.Last().Last.Value,
+      //};
+
+      //var orderResponse = broker.SendOrder(
+      //  contracts.Last().Contract,
+      //  order,
+      //  order.LmtPrice - 50,
+      //  order.LmtPrice + 50);
+
+      //Console.WriteLine($"Order {i} => {order.OrderId}");
+
+      //broker.ClearOrder((int)orders.Last().Order.PermId);
 
       //// Combo orders 
 

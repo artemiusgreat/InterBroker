@@ -305,6 +305,46 @@ namespace IBApi
     }
 
     /// <summary>
+    /// Get positions 
+    /// </summary>
+    /// <param name="cleaner"></param>
+    /// <param name="criteria"></param>
+    public virtual async Task<ExecutionMessage[]> GetTransactions(CancellationToken cleaner, ExecutionFilter criteria = null)
+    {
+      var nextId = Id;
+      var actions = new List<ExecutionMessage>();
+      var source = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+
+      void subscribe(ExecutionMessage message)
+      {
+        if (Equals(nextId, message.ReqId))
+        {
+          actions.Add(message);
+        }
+      }
+
+      void unsubscribe(int reqId)
+      {
+        if (Equals(nextId, reqId))
+        {
+          Instance.ExecDetails -= subscribe;
+          Instance.ExecDetailsEnd -= unsubscribe;
+          Instance.ClientSocket.cancelPositionsMulti(nextId);
+          source.TrySetResult(true);
+        }
+      }
+
+      Instance.ExecDetails += subscribe;
+      Instance.ExecDetailsEnd += unsubscribe;
+      Instance.ClientSocket.reqExecutions(nextId, criteria ?? new ExecutionFilter());
+
+      await await Task.WhenAny(source.Task, Task.Delay(Timeout, cleaner).ContinueWith(o => unsubscribe(nextId)));
+      await Task.Delay(Span);
+
+      return actions.ToArray();
+    }
+
+    /// <summary>
     /// Sync open balance, order, and positions 
     /// </summary>
     /// <param name="cleaner"></param>
